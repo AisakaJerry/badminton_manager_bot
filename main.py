@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 # --- Configuration ---
 # Use environment variables for sensitive data in a production environment
-BOT_TOKEN = "8280600820:AAGGtFL-ltSMXnRaJdjTw4tYT3Gcl3wKc1Q"
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 # --- Conversation States ---
 # We'll use these to manage the flow of the conversation
@@ -215,7 +215,7 @@ def main() -> None:
 
     PORT = int(os.environ.get("PORT", 8080))
     URL = os.environ.get("URL")
-    
+
     if not URL:
         logger.error("URL must be set as an environment variable for webhook deployment.")
         return
