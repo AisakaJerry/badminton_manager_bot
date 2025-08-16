@@ -11,5 +11,6 @@ RUN apt-get update && apt-get upgrade -y && pip install --no-cache-dir -r requir
 # Copy the rest of the application code into the container
 COPY . .
 
-# command to run the application using gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:$PORT", "--timeout", "300", "main:app"]
+# Command to run the application using gunicorn
+# The `main` module will be the entry point to your Python application
+CMD exec gunicorn --workers 1 --threads 8 --timeout 300 -k uvicorn.workers.UvicornWorker main:app
