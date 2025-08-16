@@ -1,4 +1,5 @@
 import os
+import asyncio
 import logging
 from fastapi import FastAPI, Request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 # --- Configuration ---
-# Get environment variables for the bot token and webhook URL
+# 从环境变量中获取 Bot Token
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 if not BOT_TOKEN:
@@ -123,37 +124,51 @@ async def fallback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.message.reply_text("I didn't understand that. Please use the buttons or /cancel to exit.")
     return ConversationHandler.END
 
-# --- Application Setup ---
-# Build the python-telegram-bot application object.
-application = Application.builder().token(BOT_TOKEN).build()
-
-# Define and add all the handlers
-conv_handler = ConversationHandler(
-    entry_points=[CommandHandler("create", create_command)],
-    states={
-        AWAIT_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_date)],
-        AWAIT_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_time)],
-        AWAIT_LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_location)],
-        CONFIRM_DETAILS: [
-            CallbackQueryHandler(confirm_event, pattern="^confirm$"),
-            CallbackQueryHandler(cancel_event, pattern="^cancel$"),
-        ],
-    },
-    fallbacks=[CommandHandler("cancel", cancel_event)],
-)
-
-application.add_handler(CommandHandler("start", start))
-application.add_handler(conv_handler)
-
-# Create a FastAPI app instance
+# 创建 FastAPI 应用实例
 app = FastAPI()
+# 创建一个全局变量来存储 Application 实例
+application_instance = None
+
+@app.on_event("startup")
+async def init_bot_app():
+    """
+    在 FastAPI 启动时初始化并设置 bot 的应用和处理器。
+    """
+    global application_instance
+    application_instance = Application.builder().token(BOT_TOKEN).build()
+    
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("create", create_command)],
+        states={
+            AWAIT_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_date)],
+            AWAIT_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_time)],
+            AWAIT_LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_location)],
+            CONFIRM_DETAILS: [
+                CallbackQueryHandler(confirm_event, pattern="^confirm$"),
+                CallbackQueryHandler(cancel_event, pattern="^cancel$"),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_event)],
+    )
+
+    application_instance.add_handler(CommandHandler("start", start))
+    application_instance.add_handler(conv_handler)
+    # 调用 initialize() 方法来完成初始化
+    await application_instance.initialize()
+
 
 @app.post("/")
 async def telegram_webhook(request: Request):
+    global application_instance
     try:
+        # 确保 application_instance 已被初始化
+        if application_instance is None:
+            raise RuntimeError("Application instance not initialized.")
+
         body = await request.json()
-        update = Update.de_json(body, application.bot)
-        await application.process_update(update)
+        update = Update.de_json(body, application_instance.bot)
+        
+        await application_instance.process_update(update)
     except Exception as e:
         logger.error(f"Error processing webhook: {e}")
         return {"status": "error", "message": f"Webhook processing failed: {e}"}, 500
