@@ -13,4 +13,4 @@ COPY . .
 
 # Command to run the application using gunicorn
 # The `main` module will be the entry point to your Python application
-CMD exec gunicorn --bind :$PORT --workers 1 --threads 8 --timeout 300 main:application
+CMD exec gunicorn --bind :$PORT --workers 1 --threads 8 --timeout 300 main:application.asgi_app
