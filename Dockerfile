@@ -12,4 +12,4 @@ RUN apt-get update && apt-get upgrade -y && pip install --no-cache-dir -r requir
 COPY . .
 
 # command to run the application using gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:$PORT", "main:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:$PORT", "--timeout", "300", "main:app"]
