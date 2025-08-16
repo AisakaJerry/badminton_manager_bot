@@ -1,5 +1,4 @@
 import os
-import asyncio
 import logging
 from fastapi import FastAPI, Request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -24,7 +23,9 @@ logger = logging.getLogger(__name__)
 # --- Configuration ---
 # Get environment variables for the bot token and webhook URL
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # e.g. https://your-service-name.run.app
+
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN environment variable not set.")
 
 # --- Conversation States ---
 AWAIT_DATE, AWAIT_TIME, AWAIT_LOCATION, CONFIRM_DETAILS = range(4)
@@ -123,12 +124,8 @@ async def fallback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     return ConversationHandler.END
 
 # --- Application Setup ---
-# Build the python-telegram-bot application object. It's not a FastAPI app!
-application = (
-    Application.builder()
-    .token(BOT_TOKEN)
-    .build()
-)
+# Build the python-telegram-bot application object.
+application = Application.builder().token(BOT_TOKEN).build()
 
 # Define and add all the handlers
 conv_handler = ConversationHandler(
@@ -148,23 +145,17 @@ conv_handler = ConversationHandler(
 application.add_handler(CommandHandler("start", start))
 application.add_handler(conv_handler)
 
-# Create a FastAPI app instance, which is the actual callable object for gunicorn.
+# Create a FastAPI app instance
 app = FastAPI()
 
 @app.post("/")
 async def telegram_webhook(request: Request):
-    """
-    Receives Telegram webhook updates and passes them to our bot application.
-    """
-    if not BOT_TOKEN or not WEBHOOK_URL:
-        logger.error("BOT_TOKEN and WEBHOOK_URL environment variables are not set.")
-        return {"status": "error"}
-
-    # Telegram sends the update as JSON in the request body
-    body = await request.json()
-    update = Update.de_json(body, application.bot)
-    
-    # Process the update asynchronously
-    await application.process_update(update)
+    try:
+        body = await request.json()
+        update = Update.de_json(body, application.bot)
+        await application.process_update(update)
+    except Exception as e:
+        logger.error(f"Error processing webhook: {e}")
+        return {"status": "error", "message": f"Webhook processing failed: {e}"}, 500
     
     return {"status": "ok"}
