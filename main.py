@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 # --- Configuration ---
 # Use environment variables for sensitive data in a production environment
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
+EXTERNAL_SERVICE_URL = os.environ.get("EXTERNAL_SERVICE_URL")
 
 # --- Conversation States ---
 # We'll use these to manage the flow of the conversation
@@ -179,53 +180,68 @@ async def fallback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.message.reply_text("I didn't understand that. Please use the buttons or /cancel to exit.")
     return ConversationHandler.END
 
+# The application object is now at the top level so gunicorn can find it.
+application = Application.builder().token(BOT_TOKEN).build()
 
+# Define and add all the handlers
+conv_handler = ConversationHandler(
+    entry_points=[CommandHandler("create", create_command)],
+    states={
+        AWAIT_DATE: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, get_date),
+        ],
+        AWAIT_TIME: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, get_time),
+        ],
+        AWAIT_LOCATION: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, get_location),
+        ],
+        CONFIRM_DETAILS: [
+            CallbackQueryHandler(confirm_event, pattern="^confirm$"),
+            CallbackQueryHandler(cancel_event, pattern="^cancel$"),
+        ],
+    },
+    fallbacks=[CommandHandler("cancel", cancel_event)],
+)
+
+application.add_handler(CommandHandler("start", start))
+application.add_handler(conv_handler)
+
+# The main function is now a simple entry point for gunicorn.
+# It does not contain the bot's application logic.
 def main() -> None:
     """
-    Starts the bot using a webhook, which is ideal for cloud services.
+    This function is a simple entry point that will be called by gunicorn.
+    It doesn't contain the bot's main application logic, which is now
+    defined at the top level to be accessible by gunicorn.
     """
+    logger.info("Gunicorn is starting the application...")
+    
+    # You will use `gunicorn main:application` to run the webhook.
+    # The application.run_webhook(...) call is now managed by gunicorn
+    # based on the `CMD` in your Dockerfile.
+    
+    # If running locally for testing, you might use:
+    # application.run_polling()
+    # but this is not for Cloud Run deployment.
+    
     if not BOT_TOKEN:
-        logger.error("BOT_TOKEN must be set as environment variables.")
+        logger.error("BOT_TOKEN environment variable not set. Please configure it.")
         return
-
-    application = Application.builder().token(BOT_TOKEN).build()
-
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("create", create_command)],
-        states={
-            AWAIT_DATE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, get_date),
-            ],
-            AWAIT_TIME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, get_time),
-            ],
-            AWAIT_LOCATION: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, get_location),
-            ],
-            CONFIRM_DETAILS: [
-                CallbackQueryHandler(confirm_event, pattern="^confirm$"),
-                CallbackQueryHandler(cancel_event, pattern="^cancel$"),
-            ],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_event)],
-    )
-
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(conv_handler)
 
     PORT = int(os.environ.get("PORT", 8080))
     URL = os.environ.get("URL")
-
+    
     if not URL:
-        logger.error("URL must be set as an environment variable for webhook deployment.")
+        logger.error("URL environment variable not set. Please configure it.")
         return
 
-    # Set the webhook URL on Telegram
+    # Set the webhook URL on Telegram. This happens when the container starts.
     application.bot.set_webhook(url=f"{URL}/telegram")
-    
-    # Start the webhook listener
-    application.run_webhook(listen="0.0.0.0", port=PORT, url_path="telegram")
+    logger.info("Webhook set. Application is ready to receive requests.")
 
+# This __name__ check is important for gunicorn. It ensures the main() function
+# is only called when the script is executed directly, not when it's imported
+# by gunicorn.
 if __name__ == "__main__":
     main()
-
