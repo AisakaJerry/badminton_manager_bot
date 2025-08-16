@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+from fastapi import FastAPI, Request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -23,13 +24,7 @@ logger = logging.getLogger(__name__)
 # --- Configuration ---
 # Get environment variables for the bot token and webhook URL
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL") # e.g. https://your-service-name.run.app/telegram
-
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN environment variable not set.")
-if not WEBHOOK_URL:
-    raise ValueError("WEBHOOK_URL environment variable not set.")
-
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # e.g. https://your-service-name.run.app
 
 # --- Conversation States ---
 AWAIT_DATE, AWAIT_TIME, AWAIT_LOCATION, CONFIRM_DETAILS = range(4)
@@ -126,21 +121,12 @@ async def cancel_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 async def fallback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("I didn't understand that. Please use the buttons or /cancel to exit.")
     return ConversationHandler.END
-    
+
 # --- Application Setup ---
-
-# This function will be run once by `Application.builder`
-async def post_init(application: Application) -> None:
-    logger.info("Setting webhook...")
-    await application.bot.set_webhook(url=WEBHOOK_URL)
-    logger.info("Webhook has been set successfully!")
-
-# Build the application
-# Gunicorn would find this top-level `application` object
+# Build the python-telegram-bot application object. It's not a FastAPI app!
 application = (
     Application.builder()
     .token(BOT_TOKEN)
-    .post_init(post_init) # <--- Run our function to set the webhook after initialization
     .build()
 )
 
@@ -161,3 +147,24 @@ conv_handler = ConversationHandler(
 
 application.add_handler(CommandHandler("start", start))
 application.add_handler(conv_handler)
+
+# Create a FastAPI app instance, which is the actual callable object for gunicorn.
+app = FastAPI()
+
+@app.post("/")
+async def telegram_webhook(request: Request):
+    """
+    Receives Telegram webhook updates and passes them to our bot application.
+    """
+    if not BOT_TOKEN or not WEBHOOK_URL:
+        logger.error("BOT_TOKEN and WEBHOOK_URL environment variables are not set.")
+        return {"status": "error"}
+
+    # Telegram sends the update as JSON in the request body
+    body = await request.json()
+    update = Update.de_json(body, application.bot)
+    
+    # Process the update asynchronously
+    await application.process_update(update)
+    
+    return {"status": "ok"}
