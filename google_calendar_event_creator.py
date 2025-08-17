@@ -2,6 +2,7 @@ import os
 import json
 import logging
 from datetime import datetime
+import pytz
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -12,7 +13,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 # Read configuration from environment variables
 CREDENTIALS_JSON = os.environ.get("GOOGLE_CALENDAR_CREDENTIALS_JSON")
-EVENT_ATTENDEES_STR = os.environ.get("EVENT_ATTENDEES", "")
 CALENDAR_ID = os.environ.get("CALENDAR_ID", "primary")
 
 # Raise an error if the credentials are not set
@@ -22,11 +22,9 @@ if not CREDENTIALS_JSON:
 
 # Parse credentials using the correct method for service accounts
 try:
-    # Use google.oauth2.service_account instead of generic Credentials
     from google.oauth2 import service_account
     
     creds_info = json.loads(CREDENTIALS_JSON)
-    # The `from_service_account_info` method is specifically designed for service account credentials
     creds = service_account.Credentials.from_service_account_info(
         creds_info,
         scopes=['https://www.googleapis.com/auth/calendar.events']
@@ -34,9 +32,6 @@ try:
 except (json.JSONDecodeError, ValueError, ImportError) as e:
     logging.error(f"Failed to parse or load service account credentials: {e}")
     raise
-
-# Parse attendees
-ATTENDEES = [{"email": email.strip()} for email in EVENT_ATTENDEES_STR.split(',') if email.strip()]
 
 def create_calendar_event(date: str, time_range: str, location: str, summary: str = "Badminton Booking"):
     """
@@ -56,27 +51,30 @@ def create_calendar_event(date: str, time_range: str, location: str, summary: st
 
         # Parse date and time
         start_time_str, end_time_str = time_range.split('-')
-        start_datetime = datetime.strptime(f"{date} {start_time_str}", '%Y-%m-%d %H:%M')
-        end_datetime = datetime.strptime(f"{date} {end_time_str}", '%Y-%m-%d %H:%M')
         
-        timezone = "Asia/Singapore"
-        # Using a consistent timezone for event creation
-        start_datetime = start_datetime.replace(tzinfo=datetime.now().astimezone().tzinfo)
-        end_datetime = end_datetime.replace(tzinfo=datetime.now().astimezone().tzinfo)
+        # Use a timezone object to correctly localize the user's input time
+        timezone_sg = pytz.timezone("Asia/Singapore")
+        
+        # Create naive datetime objects
+        start_datetime_naive = datetime.strptime(f"{date} {start_time_str}", '%Y-%m-%d %H:%M')
+        end_datetime_naive = datetime.strptime(f"{date} {end_time_str}", '%Y-%m-%d %H:%M')
+        
+        # Localize the naive datetime objects to the correct timezone
+        start_datetime_local = timezone_sg.localize(start_datetime_naive)
+        end_datetime_local = timezone_sg.localize(end_datetime_naive)
 
         event = {
             "summary": summary,
             "location": location,
             "description": f"A badminton session at {location}",
             "start": {
-                "dateTime": start_datetime.isoformat(),
-                "timeZone": timezone,
+                "dateTime": start_datetime_local.isoformat(),
+                "timeZone": "Asia/Singapore",
             },
             "end": {
-                "dateTime": end_datetime.isoformat(),
-                "timeZone": timezone,
+                "dateTime": end_datetime_local.isoformat(),
+                "timeZone": "Asia/Singapore",
             },
-            # "attendees": ATTENDEES,
             "reminders": {
                 "useDefault": False,
                 "overrides": [
@@ -86,7 +84,6 @@ def create_calendar_event(date: str, time_range: str, location: str, summary: st
             },
         }
 
-        # Use the CALENDAR_ID environment variable
         event = service.events().insert(calendarId=CALENDAR_ID, body=event).execute()
         logging.info(f"Event created: {event.get('htmlLink')}")
         return event.get('htmlLink')
