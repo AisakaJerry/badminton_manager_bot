@@ -77,7 +77,8 @@ async def create_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     context.user_data['user_message_id'] = update.message.message_id
     
     bot_message = await update.message.reply_text(
-        "Let's create a new event. First, please provide the event date (e.g., 'YYYY-MM-DD'):"
+        "Let's create a new event. First, please provide the event date (e.g., 'YYYY-MM-DD'):\n\n"
+        "Type /cancel to exit."
     )
     # Store the bot's message ID for later deletion
     context.user_data['bot_message_id'] = bot_message.message_id
@@ -87,70 +88,73 @@ async def create_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_date = update.message.text
     
-    # Update the user's message ID for the new message
+    # Store the user's message ID for the current message before a new one is sent
     context.user_data['user_message_id'] = update.message.message_id
     
-    # Delete previous messages before proceeding
-    await delete_previous_messages(update, context)
-
     try:
         datetime.strptime(user_date, '%Y-%m-%d')
         context.user_data['booking']['date'] = user_date
         logger.info(f"Received date from user: {user_date}")
         bot_message = await update.message.reply_text(
-            "Great. Now, please provide the event time (e.g., 'HH:MM-HH:MM'):"
+            "Great. Now, please provide the event time (e.g., 'HH:MM-HH:MM'):\n\n"
+            "Type /cancel to exit."
         )
         context.user_data['bot_message_id'] = bot_message.message_id
+        # Delete previous messages after the new prompt is sent
+        await delete_previous_messages(update, context)
         return AWAIT_TIME
     except ValueError:
         bot_message = await update.message.reply_text(
             "Invalid date format. Please use YYYY-MM-DD, for example '2025-08-20'."
         )
         context.user_data['bot_message_id'] = bot_message.message_id
+        await delete_previous_messages(update, context)
         return AWAIT_DATE
 
 async def get_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_time = update.message.text
     
     context.user_data['user_message_id'] = update.message.message_id
-    await delete_previous_messages(update, context)
-
+    
     time_pattern = re.compile(r'^([01]\d|2[0-3]):([0-5]\d)-([01]\d|2[0-3]):([0-5]\d)$')
     if time_pattern.match(user_time):
         context.user_data['booking']['time'] = user_time
         logger.info(f"Received time from user: {user_time}")
         bot_message = await update.message.reply_text(
-            "Thanks. Now, please provide the location (e.g., 'ABC Badminton Hall, Court 3'):"
+            "Thanks. Now, please provide the location (e.g., 'ABC Badminton Hall, Court 3'):\n\n"
+            "Type /cancel to exit."
         )
         context.user_data['bot_message_id'] = bot_message.message_id
+        await delete_previous_messages(update, context)
         return AWAIT_LOCATION
     else:
         bot_message = await update.message.reply_text(
             "Invalid time format. Please use HH:MM-HH:MM, for example '19:00-21:00'."
         )
         context.user_data['bot_message_id'] = bot_message.message_id
+        await delete_previous_messages(update, context)
         return AWAIT_TIME
 
 async def get_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_location = update.message.text
     
     context.user_data['user_message_id'] = update.message.message_id
-    await delete_previous_messages(update, context)
-
+    
     context.user_data['booking']['location'] = user_location
     logger.info(f"Received location from user: {user_location}")
     bot_message = await update.message.reply_text(
-        "Who booked the court? Please provide a name:"
+        "Who booked the court? Please provide a name:\n\n"
+        "Type /cancel to exit."
     )
     context.user_data['bot_message_id'] = bot_message.message_id
+    await delete_previous_messages(update, context)
     return AWAIT_BOOKER_NAME
 
 async def get_booker_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_name = update.message.text
     
     context.user_data['user_message_id'] = update.message.message_id
-    await delete_previous_messages(update, context)
-
+    
     context.user_data['booking']['booker_name'] = user_name
     logger.info(f"Received booker name from user: {user_name}")
     
@@ -169,6 +173,7 @@ async def get_booker_name(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         parse_mode="Markdown"
     )
     context.user_data['bot_message_id'] = bot_message.message_id
+    await delete_previous_messages(update, context)
     
     return CONFIRM_DETAILS
 
@@ -231,14 +236,21 @@ async def confirm_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return ConversationHandler.END
 
 async def cancel_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-
-    await query.edit_message_text(
-        "❌ Canceled. The event was not created. "
-        "This conversation is now over. To start again, use /create.",
-        parse_mode="Markdown"
-    )
+    # Handle both callback queries (from buttons) and command messages
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        await query.edit_message_text(
+            "❌ Canceled. The event was not created. "
+            "This conversation is now over. To start again, use /create.",
+            parse_mode="Markdown"
+        )
+    else:
+        await update.message.reply_text(
+            "❌ Canceled. The event was not created. "
+            "This conversation is now over. To start again, use /create.",
+            parse_mode="Markdown"
+        )
     
     context.user_data.clear()
     return ConversationHandler.END
