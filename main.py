@@ -14,6 +14,8 @@ from telegram.ext import (
     ConversationHandler,
     CallbackQueryHandler,
 )
+# Assuming a separate file named `calendar_api.py` exists
+import google_calendar_event_creator as calendar_api
 
 # --- Logging Setup ---
 logging.basicConfig(
@@ -24,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 # --- Configuration ---
-# 从环境变量中获取 Bot Token
+# Get environment variables for the bot token
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 if not BOT_TOKEN:
@@ -54,27 +56,45 @@ async def create_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     logger.info("User requested to create an event. Starting manual input flow.")
     context.user_data['booking'] = {}
     await update.message.reply_text(
-        "Let's create a new event. First, please provide the event date (e.g., '2025-08-20'):"
+        "Let's create a new event. First, please provide the event date (e.g., 'YYYY-MM-DD'):"
     )
     return AWAIT_DATE
 
 async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_date = update.message.text
-    context.user_data['booking']['date'] = user_date
-    logger.info(f"Received date from user: {user_date}")
-    await update.message.reply_text(
-        "Great. Now, please provide the event time (e.g., '19:00-21:00'):"
-    )
-    return AWAIT_TIME
+    
+    # Date format check
+    try:
+        datetime.strptime(user_date, '%Y-%m-%d')
+        context.user_data['booking']['date'] = user_date
+        logger.info(f"Received date from user: {user_date}")
+        await update.message.reply_text(
+            "Great. Now, please provide the event time (e.g., 'HH:MM-HH:MM'):"
+        )
+        return AWAIT_TIME
+    except ValueError:
+        await update.message.reply_text(
+            "Invalid date format. Please use YYYY-MM-DD, for example '2025-08-20'."
+        )
+        return AWAIT_DATE
 
 async def get_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_time = update.message.text
-    context.user_data['booking']['time'] = user_time
-    logger.info(f"Received time from user: {user_time}")
-    await update.message.reply_text(
-        "Thanks. Finally, please provide the location (e.g., 'ABC Badminton Hall, Court 3'):"
-    )
-    return AWAIT_LOCATION
+    
+    # Time format check, use regex to match 'HH:MM-HH:MM'
+    time_pattern = re.compile(r'^([01]\d|2[0-3]):([0-5]\d)-([01]\d|2[0-3]):([0-5]\d)$')
+    if time_pattern.match(user_time):
+        context.user_data['booking']['time'] = user_time
+        logger.info(f"Received time from user: {user_time}")
+        await update.message.reply_text(
+            "Thanks. Finally, please provide the location (e.g., 'ABC Badminton Hall, Court 3'):"
+        )
+        return AWAIT_LOCATION
+    else:
+        await update.message.reply_text(
+            "Invalid time format. Please use HH:MM-HH:MM, for example '19:00-21:00'."
+        )
+        return AWAIT_TIME
 
 async def get_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_location = update.message.text
@@ -98,27 +118,58 @@ async def get_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 async def confirm_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
+    
     booking_data = context.user_data.get('booking')
     if not booking_data:
         await query.edit_message_text("No booking data found. Please start over with /create.")
         return ConversationHandler.END
+
     logger.info(f"User confirmed event: {booking_data}")
-    await query.edit_message_text(
-        "✅ Confirmed! A Google Calendar event has been created.\n\n"
-        "This conversation is now over. To create another event, use /create.",
-        parse_mode="Markdown"
-    )
+    
+    # Extract data from user_data and call the API function
+    date = booking_data.get('date')
+    time = booking_data.get('time')
+    location = booking_data.get('location')
+    
+    # Call the new API function to create the calendar event
+    try:
+        event_link = calendar_api.create_calendar_event(
+            date=date,
+            time_range=time,
+            location=location
+        )
+        if event_link:
+            await query.edit_message_text(
+                f"✅ Confirmed! A Google Calendar event has been created.\n\n"
+                f"**Event Link:** {event_link}\n\n"
+                "This conversation is now over. To create another event, use /create.",
+                parse_mode="Markdown"
+            )
+        else:
+            await query.edit_message_text(
+                "❌ Failed to create a calendar event. Please check the logs or try again later.",
+                parse_mode="Markdown"
+            )
+    except Exception as e:
+        logger.error(f"Error calling calendar API: {e}")
+        await query.edit_message_text(
+            "❌ An unexpected error occurred while creating the calendar event. Please try again later.",
+            parse_mode="Markdown"
+        )
+
     context.user_data.clear()
     return ConversationHandler.END
 
 async def cancel_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
+
     await query.edit_message_text(
         "❌ Canceled. The event was not created. "
         "This conversation is now over. To start again, use /create.",
         parse_mode="Markdown"
     )
+    
     context.user_data.clear()
     return ConversationHandler.END
     
@@ -126,15 +177,15 @@ async def fallback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.message.reply_text("I didn't understand that. Please use the buttons or /cancel to exit.")
     return ConversationHandler.END
 
-# 创建 FastAPI 应用实例
+# Create FastAPI app instance
 app = FastAPI()
-# 创建一个全局变量来存储 Application 实例
+# Create a global variable to store the Application instance
 application_instance = None
 
 @app.on_event("startup")
 async def init_bot_app():
     """
-    在 FastAPI 启动时初始化并设置 bot 的应用和处理器。
+    Initializes the bot's application and handlers when FastAPI starts up.
     """
     global application_instance
     application_instance = Application.builder().token(BOT_TOKEN).build()
@@ -142,9 +193,18 @@ async def init_bot_app():
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("create", create_command)],
         states={
-            AWAIT_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_date)],
-            AWAIT_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_time)],
-            AWAIT_LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_location)],
+            AWAIT_DATE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_date),
+                CommandHandler("cancel", cancel_event),
+            ],
+            AWAIT_TIME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_time),
+                CommandHandler("cancel", cancel_event),
+            ],
+            AWAIT_LOCATION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_location),
+                CommandHandler("cancel", cancel_event),
+            ],
             CONFIRM_DETAILS: [
                 CallbackQueryHandler(confirm_event, pattern="^confirm$"),
                 CallbackQueryHandler(cancel_event, pattern="^cancel$"),
@@ -155,7 +215,8 @@ async def init_bot_app():
 
     application_instance.add_handler(CommandHandler("start", start))
     application_instance.add_handler(conv_handler)
-    # 调用 initialize() 方法来完成初始化
+    
+    # It is crucial to call initialize() to finalize the setup of the application instance.
     await application_instance.initialize()
 
 
@@ -163,7 +224,6 @@ async def init_bot_app():
 async def telegram_webhook(request: Request):
     global application_instance
     try:
-        # 确保 application_instance 已被初始化
         if application_instance is None:
             raise RuntimeError("Application instance not initialized.")
 
