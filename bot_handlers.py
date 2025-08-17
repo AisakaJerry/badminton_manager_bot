@@ -1,0 +1,226 @@
+import os
+import logging
+import re
+from datetime import datetime
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+    ConversationHandler,
+    CallbackQueryHandler,
+)
+import google_calendar_event_creator as calendar_api
+
+# Use a separate logger for this module
+logger = logging.getLogger(__name__)
+
+# --- Configuration ---
+MAX_CAPACITY = os.environ.get("MAX_CAPACITY", "6")
+
+# --- Conversation States ---
+AWAIT_DATE, AWAIT_TIME, AWAIT_LOCATION, AWAIT_BOOKER_NAME, CONFIRM_DETAILS = range(5)
+
+# --- Helper & Handler Functions ---
+def format_booking_details(booking_data):
+    return (
+        f"**Event:** {booking_data.get('summary', 'Badminton Booking')}\n"
+        f"**Location:** {booking_data.get('location', 'Not specified')}\n"
+        f"**Time:** {booking_data.get('time', 'Not specified')}\n"
+        f"**Booked by:** {booking_data.get('booker_name', 'Not specified')}"
+    )
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text(
+        "Hello! I'm your Badminton Calendar Bot. "
+        "I can help you create a Google Calendar event. "
+        "Send /create to begin."
+    )
+    return ConversationHandler.END
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Sends a message explaining how to use the bot."""
+    help_text = (
+        "This bot helps you create Google Calendar events for badminton bookings.\n\n"
+        "Here are the available commands:\n"
+        "/start - Starts the bot and shows welcome message.\n"
+        "/create - Begins the step-by-step process to create a new event.\n"
+        "/help - Displays this help message."
+    )
+    await update.message.reply_text(help_text)
+
+
+async def create_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    logger.info("User requested to create an event. Starting manual input flow.")
+    context.user_data['booking'] = {}
+    await update.message.reply_text(
+        "Let's create a new event. First, please provide the event date (e.g., 'YYYY-MM-DD'):"
+    )
+    return AWAIT_DATE
+
+async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_date = update.message.text
+    
+    try:
+        datetime.strptime(user_date, '%Y-%m-%d')
+        context.user_data['booking']['date'] = user_date
+        logger.info(f"Received date from user: {user_date}")
+        await update.message.reply_text(
+            "Great. Now, please provide the event time (e.g., 'HH:MM-HH:MM'):"
+        )
+        return AWAIT_TIME
+    except ValueError:
+        await update.message.reply_text(
+            "Invalid date format. Please use YYYY-MM-DD, for example '2025-08-20'."
+        )
+        return AWAIT_DATE
+
+async def get_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_time = update.message.text
+    
+    time_pattern = re.compile(r'^([01]\d|2[0-3]):([0-5]\d)-([01]\d|2[0-3]):([0-5]\d)$')
+    if time_pattern.match(user_time):
+        context.user_data['booking']['time'] = user_time
+        logger.info(f"Received time from user: {user_time}")
+        await update.message.reply_text(
+            "Thanks. Now, please provide the location (e.g., 'ABC Badminton Hall, Court 3'):"
+        )
+        return AWAIT_LOCATION
+    else:
+        await update.message.reply_text(
+            "Invalid time format. Please use HH:MM-HH:MM, for example '19:00-21:00'."
+        )
+        return AWAIT_TIME
+
+async def get_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_location = update.message.text
+    context.user_data['booking']['location'] = user_location
+    logger.info(f"Received location from user: {user_location}")
+    await update.message.reply_text(
+        "Who booked the court? Please provide a name:"
+    )
+    return AWAIT_BOOKER_NAME
+
+async def get_booker_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_name = update.message.text
+    context.user_data['booking']['booker_name'] = user_name
+    logger.info(f"Received booker name from user: {user_name}")
+    
+    booking_details = context.user_data['booking']
+    formatted_details = format_booking_details(booking_details)
+    keyboard = [
+        [InlineKeyboardButton("✅ Confirm", callback_data="confirm")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        f"I've collected the following details:\n\n{formatted_details}\n\n"
+        f"Would you like to confirm this event?",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
+    return CONFIRM_DETAILS
+
+async def confirm_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    
+    booking_data = context.user_data.get('booking')
+    if not booking_data:
+        await query.edit_message_text("No booking data found. Please start over with /create.")
+        return ConversationHandler.END
+
+    logger.info(f"User confirmed event: {booking_data}")
+    
+    date = booking_data.get('date')
+    time = booking_data.get('time')
+    location = booking_data.get('location')
+    booker_name = booking_data.get('booker_name')
+        
+    summary = f"Badminton Booking by {booker_name}" if booker_name else "Badminton Booking"
+    
+    description_lines = []
+    if MAX_CAPACITY:
+        description_lines.append(f"MAX={MAX_CAPACITY}")
+    if booker_name:
+        description_lines.append(f"Court booked by {booker_name}. Location: {location}")
+    else:
+        description_lines.append(f"Location: {location}")
+    description = "\n".join(description_lines)
+
+    try:
+        event_link = calendar_api.create_calendar_event(
+            date=date,
+            time_range=time,
+            location=location,
+            description=description
+        )
+        if event_link:
+            await query.edit_message_text(
+                f"✅ Confirmed! A Google Calendar event has been created.\n\n"
+                f"**Event Link:** {event_link}\n\n"
+                "This conversation is now over. To create another event, use /create.",
+                parse_mode="Markdown"
+            )
+        else:
+            await query.edit_message_text(
+                "❌ Failed to create a calendar event. Please check the logs or try again later.",
+                parse_mode="Markdown"
+            )
+    except Exception as e:
+        logger.error(f"Error calling calendar API: {e}")
+        await query.edit_message_text(
+            "❌ An unexpected error occurred while creating the calendar event. Please try again later.",
+            parse_mode="Markdown"
+        )
+
+    context.user_data.clear()
+    return ConversationHandler.END
+
+async def cancel_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+
+    await query.edit_message_text(
+        "❌ Canceled. The event was not created. "
+        "This conversation is now over. To start again, use /create.",
+        parse_mode="Markdown"
+    )
+    
+    context.user_data.clear()
+    return ConversationHandler.END
+
+async def fallback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    # A simplified fallback that simply returns to the beginning
+    await update.message.reply_text("I didn't understand that. Please use the buttons or /cancel to exit.")
+    return ConversationHandler.END
+
+# Define the conversation handler here
+conv_handler = ConversationHandler(
+    entry_points=[CommandHandler("create", create_command)],
+    states={
+        AWAIT_DATE: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, get_date),
+            CommandHandler("cancel", cancel_event),
+        ],
+        AWAIT_TIME: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, get_time),
+            CommandHandler("cancel", cancel_event),
+        ],
+        AWAIT_LOCATION: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, get_location),
+            CommandHandler("cancel", cancel_event),
+        ],
+        AWAIT_BOOKER_NAME: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, get_booker_name),
+            CommandHandler("cancel", cancel_event),
+        ],
+        CONFIRM_DETAILS: [
+            CallbackQueryHandler(confirm_event, pattern="^confirm$"),
+            CallbackQueryHandler(cancel_event, pattern="^cancel$"),
+        ],
+    },
+    fallbacks=[CommandHandler("cancel", cancel_event)],
+)
