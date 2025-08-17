@@ -33,7 +33,7 @@ except (json.JSONDecodeError, ValueError, ImportError) as e:
     logging.error(f"Failed to parse or load service account credentials: {e}")
     raise
 
-def create_calendar_event(date: str, time_range: str, location: str, summary: str = "Badminton Booking"):
+def create_calendar_event(date: str, time_range: str, location: str, description: str, summary: str = "Badminton 🏸"):
     """
     Creates a Google Calendar event.
 
@@ -66,7 +66,7 @@ def create_calendar_event(date: str, time_range: str, location: str, summary: st
         event = {
             "summary": summary,
             "location": location,
-            "description": f"A badminton session at {location}",
+            "description": description,
             "start": {
                 "dateTime": start_datetime_local.isoformat(),
                 "timeZone": "Asia/Singapore",
@@ -94,19 +94,3 @@ def create_calendar_event(date: str, time_range: str, location: str, summary: st
     except Exception as e:
         logging.error(f"An unexpected error occurred: {e}")
         return None
-
-# Execute this block if the script is run directly
-if __name__ == "__main__":
-    try:
-        event_link = create_calendar_event(
-            date="2025-08-25",
-            time_range="20:00-22:00",
-            location="ABC Badminton Hall, Court 3",
-            summary="Weekly Badminton Game"
-        )
-        if event_link:
-            print(f"Successfully created a calendar event. The link is: {event_link}")
-        else:
-            print("Failed to create a calendar event. Please check the logs for more information.")
-    except Exception as e:
-        print(f"Script execution failed: {e}")

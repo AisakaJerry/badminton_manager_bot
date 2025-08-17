@@ -28,12 +28,13 @@ logger = logging.getLogger(__name__)
 # --- Configuration ---
 # Get environment variables for the bot token
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable not set.")
+# New environment variable for max capacity
+MAX_CAPACITY = os.environ.get("MAX_CAPACITY", "6")
 
 # --- Conversation States ---
-AWAIT_DATE, AWAIT_TIME, AWAIT_LOCATION, CONFIRM_DETAILS = range(4)
+AWAIT_DATE, AWAIT_TIME, AWAIT_LOCATION, AWAIT_BOOKER_NAME, CONFIRM_DETAILS = range(5)
 
 # --- Helper & Handler Functions ---
 def format_booking_details(booking_data):
@@ -87,7 +88,7 @@ async def get_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         context.user_data['booking']['time'] = user_time
         logger.info(f"Received time from user: {user_time}")
         await update.message.reply_text(
-            "Thanks. Finally, please provide the location (e.g., 'ABC Badminton Hall, Court 3'):"
+            "Thanks. Please also provide the location (e.g., 'ABC Badminton Hall, Court 3'):"
         )
         return AWAIT_LOCATION
     else:
@@ -100,6 +101,18 @@ async def get_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     user_location = update.message.text
     context.user_data['booking']['location'] = user_location
     logger.info(f"Received location from user: {user_location}")
+    # New step: ask for the booker's name
+    await update.message.reply_text(
+        "Who booked the court? Please provide a name:"
+    )
+    return AWAIT_BOOKER_NAME
+
+async def get_booker_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_name = update.message.text
+    context.user_data['booking']['booker_name'] = user_name
+    logger.info(f"Received booker name from user: {user_name}")
+    
+    # After getting the name, proceed to confirmation
     booking_details = context.user_data['booking']
     formatted_details = format_booking_details(booking_details)
     keyboard = [
@@ -130,13 +143,24 @@ async def confirm_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     date = booking_data.get('date')
     time = booking_data.get('time')
     location = booking_data.get('location')
-    
-    # Call the new API function to create the calendar event
+    booker_name = booking_data.get('booker_name')
+        
+    # New description line including MAX_CAPACITY
+    description_lines = []
+    if MAX_CAPACITY:
+        description_lines.append(f"MAX={MAX_CAPACITY}")
+    if booker_name:
+        description_lines.append(f"Court booked by {booker_name}. Location: {location}")
+    else:
+        description_lines.append(f"Location: {location}")
+    description = "\n".join(description_lines)
+
     try:
         event_link = calendar_api.create_calendar_event(
             date=date,
             time_range=time,
-            location=location
+            location=location,
+            description=description
         )
         if event_link:
             await query.edit_message_text(
@@ -203,6 +227,10 @@ async def init_bot_app():
             ],
             AWAIT_LOCATION: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, get_location),
+                CommandHandler("cancel", cancel_event),
+            ],
+            AWAIT_BOOKER_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_booker_name),
                 CommandHandler("cancel", cancel_event),
             ],
             CONFIRM_DETAILS: [
