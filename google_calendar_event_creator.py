@@ -13,7 +13,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # Read configuration from environment variables
 CREDENTIALS_JSON = os.environ.get("GOOGLE_CALENDAR_CREDENTIALS_JSON")
 EVENT_ATTENDEES_STR = os.environ.get("EVENT_ATTENDEES", "")
-# New environment variable for the specific calendar ID
 CALENDAR_ID = os.environ.get("CALENDAR_ID", "primary")
 
 # Raise an error if the credentials are not set
@@ -21,12 +20,19 @@ if not CREDENTIALS_JSON:
     logging.error("GOOGLE_CALENDAR_CREDENTIALS_JSON environment variable is not set.")
     raise ValueError("Missing GOOGLE_CALENDAR_CREDENTIALS_JSON environment variable.")
 
-# Parse credentials
+# Parse credentials using the correct method for service accounts
 try:
+    # Use google.oauth2.service_account instead of generic Credentials
+    from google.oauth2 import service_account
+    
     creds_info = json.loads(CREDENTIALS_JSON)
-    creds = Credentials.from_authorized_user_info(creds_info, scopes=['https://www.googleapis.com/auth/calendar.events'])
-except (json.JSONDecodeError, ValueError) as e:
-    logging.error(f"Failed to parse credentials JSON: {e}")
+    # The `from_service_account_info` method is specifically designed for service account credentials
+    creds = service_account.Credentials.from_service_account_info(
+        creds_info,
+        scopes=['https://www.googleapis.com/auth/calendar.events']
+    )
+except (json.JSONDecodeError, ValueError, ImportError) as e:
+    logging.error(f"Failed to parse or load service account credentials: {e}")
     raise
 
 # Parse attendees
@@ -54,8 +60,7 @@ def create_calendar_event(date: str, time_range: str, location: str, summary: st
         end_datetime = datetime.strptime(f"{date} {end_time_str}", '%Y-%m-%d %H:%M')
         
         timezone = "Asia/Singapore"
-        # The timezone info is added here
-        # It's better practice to make this an explicit setting
+        # Using a consistent timezone for event creation
         start_datetime = start_datetime.replace(tzinfo=datetime.now().astimezone().tzinfo)
         end_datetime = end_datetime.replace(tzinfo=datetime.now().astimezone().tzinfo)
 
