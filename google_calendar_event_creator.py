@@ -76,7 +76,7 @@ def create_calendar_event(date: str, time_range: str, location: str, summary: st
                 "dateTime": end_datetime.isoformat(),
                 "timeZone": timezone,
             },
-            "attendees": ATTENDEES,
+            # "attendees": ATTENDEES,
             "reminders": {
                 "useDefault": False,
                 "overrides": [
