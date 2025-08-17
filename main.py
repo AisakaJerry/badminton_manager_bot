@@ -1,5 +1,4 @@
 import os
-import asyncio
 import logging
 import re
 from datetime import datetime
@@ -14,7 +13,6 @@ from telegram.ext import (
     ConversationHandler,
     CallbackQueryHandler,
 )
-# Assuming a separate file named `calendar_api.py` exists
 import google_calendar_event_creator as calendar_api
 
 # --- Logging Setup ---
@@ -28,10 +26,11 @@ logger = logging.getLogger(__name__)
 # --- Configuration ---
 # Get environment variables for the bot token
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN environment variable not set.")
 # New environment variable for max capacity
 MAX_CAPACITY = os.environ.get("MAX_CAPACITY", "6")
+
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN environment variable not set.")
 
 # --- Conversation States ---
 AWAIT_DATE, AWAIT_TIME, AWAIT_LOCATION, AWAIT_BOOKER_NAME, CONFIRM_DETAILS = range(5)
@@ -41,7 +40,8 @@ def format_booking_details(booking_data):
     return (
         f"**Event:** {booking_data.get('summary', 'Badminton Booking')}\n"
         f"**Location:** {booking_data.get('location', 'Not specified')}\n"
-        f"**Time:** {booking_data.get('time', 'Not specified')}"
+        f"**Time:** {booking_data.get('time', 'Not specified')}\n"
+        f"**Booked by:** {booking_data.get('booker_name', 'Not specified')}"
     )
 
 # --- Command Handlers ---
@@ -52,6 +52,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "Send /create to begin."
     )
     return ConversationHandler.END
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Sends a message explaining how to use the bot."""
+    help_text = (
+        "This bot helps you create Google Calendar events for badminton bookings.\n\n"
+        "Here are the available commands:\n"
+        "/create - Begins the step-by-step process to create a new event.\n"
+        "/help - Displays this help message."
+    )
+    await update.message.reply_text(help_text)
+
 
 async def create_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     logger.info("User requested to create an event. Starting manual input flow.")
@@ -88,7 +99,7 @@ async def get_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         context.user_data['booking']['time'] = user_time
         logger.info(f"Received time from user: {user_time}")
         await update.message.reply_text(
-            "Thanks. Please also provide the location (e.g., 'ABC Badminton Hall, Court 3'):"
+            "Thanks. Now, please provide the location (e.g., 'ABC Badminton Hall, Court 3'):"
         )
         return AWAIT_LOCATION
     else:
