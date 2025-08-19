@@ -73,18 +73,16 @@ async def check_badminton_session_command(update: Update, context: ContextTypes.
     events = calendar_api.check_upcoming_events(days=7)
     
     if events:
-        def format_event_datetime(dt_str):
-            try:
-                dt = datetime.fromisoformat(dt_str)
-                return dt.strftime('%Y-%m-%d %H:%M')
-            except Exception:
-                return dt_str  # fallback to original if parsing fails
-
-        event_list = "\n".join([
-            f"- **{e['summary']}** on {format_event_datetime(e['start'])} at {e['location']}"
-            for e in events
-        ])
-        response_text = f"Here are the upcoming badminton sessions in the next 7 days:\n\n{event_list}"
+        response_text = "Here are the upcoming badminton sessions in the next 7 days:\n\n"
+        for e in events:
+            attendee_list = ", ".join(e['attendees']) if e['attendees'] else "No attendees specified"
+            response_text += (
+                f"- **{e['summary']}**\n"
+                f"  📅 Date: {e['start'].split('T')[0]}\n"
+                f"  ⏰ Time: {e['start'].split('T')[1][:5]} - {e['end'].split('T')[1][:5]}\n"
+                f"  📍 Location: {e['location']}\n"
+                f"  👥 Attendees: {attendee_list}\n\n"
+            )
     else:
         response_text = "There are no upcoming badminton sessions in the next 7 days."
         

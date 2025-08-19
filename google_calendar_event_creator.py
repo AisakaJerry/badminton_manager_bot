@@ -63,11 +63,17 @@ def check_upcoming_events(days: int = 7):
         for event in events:
             start = event['start'].get('dateTime', event['start'].get('date'))
             end = event['end'].get('dateTime', event['end'].get('date'))
+            
+            # Extract attendees, defaulting to an empty list if not found
+            attendees = event.get('attendees', [])
+            attendee_emails = [a['email'] for a in attendees if 'email' in a]
+            
             event_list.append({
                 'summary': event['summary'],
                 'start': start,
                 'end': end,
-                'location': event.get('location', 'Not specified')
+                'location': event.get('location', 'Not specified'),
+                'attendees': attendee_emails
             })
             
         return event_list
@@ -79,7 +85,7 @@ def check_upcoming_events(days: int = 7):
         logging.error(f"An unexpected error occurred: {e}")
         return []
 
-def create_calendar_event(date: str, time_range: str, location: str, description: str = "", summary: str = "Badminton 🏸"):
+def create_calendar_event(date: str, time_range: str, location: str, summary: str = "Badminton 🏸", description: str = ""):
     """
     Creates a Google Calendar event.
 
