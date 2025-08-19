@@ -1,10 +1,10 @@
 import os
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
+from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
@@ -22,18 +22,64 @@ if not CREDENTIALS_JSON:
 
 # Parse credentials using the correct method for service accounts
 try:
-    from google.oauth2 import service_account
-    
     creds_info = json.loads(CREDENTIALS_JSON)
     creds = service_account.Credentials.from_service_account_info(
         creds_info,
-        scopes=['https://www.googleapis.com/auth/calendar.events']
+        scopes=['https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/calendar.readonly']
     )
-except (json.JSONDecodeError, ValueError, ImportError) as e:
+except (json.JSONDecodeError, ValueError) as e:
     logging.error(f"Failed to parse or load service account credentials: {e}")
     raise
 
-def create_calendar_event(date: str, time_range: str, location: str, description: str, summary: str = "Badminton 🏸"):
+def check_upcoming_events(days: int = 7):
+    """
+    Checks the Google Calendar for upcoming events within a specified number of days.
+
+    Args:
+        days (int): The number of days to check for events from the current date.
+
+    Returns:
+        list: A list of dictionaries, each representing an event. Returns an empty list on failure.
+    """
+    try:
+        service = build("calendar", "v3", credentials=creds)
+        
+        # Set the time range for the query
+        now = datetime.utcnow().isoformat() + 'Z'  # 'Z' indicates UTC time
+        end_date = datetime.utcnow() + timedelta(days=days)
+        end_date_iso = end_date.isoformat() + 'Z'
+
+        events_result = service.events().list(
+            calendarId=CALENDAR_ID,
+            timeMin=now,
+            timeMax=end_date_iso,
+            singleEvents=True,
+            orderBy='startTime'
+        ).execute()
+        
+        events = events_result.get('items', [])
+        
+        event_list = []
+        for event in events:
+            start = event['start'].get('dateTime', event['start'].get('date'))
+            end = event['end'].get('dateTime', event['end'].get('date'))
+            event_list.append({
+                'summary': event['summary'],
+                'start': start,
+                'end': end,
+                'location': event.get('location', 'Not specified')
+            })
+            
+        return event_list
+
+    except HttpError as e:
+        logging.error(f"An HTTP error occurred while checking events: {e}")
+        return []
+    except Exception as e:
+        logging.error(f"An unexpected error occurred: {e}")
+        return []
+
+def create_calendar_event(date: str, time_range: str, location: str, description: str = "", summary: str = "Badminton 🏸"):
     """
     Creates a Google Calendar event.
 
@@ -42,6 +88,7 @@ def create_calendar_event(date: str, time_range: str, location: str, description
         time_range (str): The time of the event in 'HH:MM-HH:MM' format.
         location (str): The location of the event.
         summary (str): A summary or title for the event.
+        description (str): A description for the event.
 
     Returns:
         str: The HTML link to the created event on success, or None on failure.

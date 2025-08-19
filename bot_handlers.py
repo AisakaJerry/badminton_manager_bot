@@ -58,9 +58,37 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/start - Starts the bot and shows welcome message.\n"
         "/create - Begins the step-by-step process to create a new event.\n"
         "/cancel - Cancels the current event creation process.\n"
-        "/help - Displays this help message."
+        "/help - Displays this help message.\n"
+        "/check_badminton_session - Checks for all badminton sessions in the next 7 days."
     )
     await update.message.reply_text(help_text)
+
+async def check_badminton_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Handles the /check_badminton_session command.
+    Checks the Google Calendar for upcoming events in the next 7 days.
+    """
+    logger.info("User requested to check for upcoming badminton sessions.")
+    
+    events = calendar_api.check_upcoming_events(days=7)
+    
+    if events:
+        def format_event_datetime(dt_str):
+            try:
+                dt = datetime.fromisoformat(dt_str)
+                return dt.strftime('%Y-%m-%d %H:%M')
+            except Exception:
+                return dt_str  # fallback to original if parsing fails
+
+        event_list = "\n".join([
+            f"- **{e['summary']}** on {format_event_datetime(e['start'])} at {e['location']}"
+            for e in events
+        ])
+        response_text = f"Here are the upcoming badminton sessions in the next 7 days:\n\n{event_list}"
+    else:
+        response_text = "There are no upcoming badminton sessions in the next 7 days."
+        
+    await update.message.reply_text(response_text, parse_mode="Markdown")
 
 
 async def create_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -201,6 +229,7 @@ async def confirm_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             location=location,
             description=description
         )
+        
         # Delete messages before sending the final confirmation
         await delete_messages(context, chat_id, context.user_data['messages_to_delete'])
         
@@ -211,14 +240,16 @@ async def confirm_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
                     f"✅ Confirmed! A Google Calendar event has been created.\n\n"
                     f"**Event Link:** {event_link}\n\n"
                     "This conversation is now over. To create another event, use /create."
-                )
+                ),
+                parse_mode="Markdown"
             )
         else:
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=(
                     "❌ Failed to create a calendar event. Please check the logs or try again later."
-                )
+                ),
+                parse_mode="Markdown"
             )
     except Exception as e:
         logger.error(f"Error calling calendar API: {e}")
@@ -226,7 +257,8 @@ async def confirm_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             chat_id=chat_id,
             text=(
                 "❌ An unexpected error occurred while creating the calendar event. Please try again later."
-            )
+            ),
+            parse_mode="Markdown"
         )
 
     context.user_data.clear()
@@ -234,7 +266,8 @@ async def confirm_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 async def cancel_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     chat_id = update.effective_chat.id
-    # Handle both callback queries (from buttons) and command messages
+    
+    # Check if this is a button click or a command message
     if update.callback_query:
         query = update.callback_query
         await query.answer()
@@ -245,7 +278,8 @@ async def cancel_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             text=(
                 "❌ Canceled. The event was not created. "
                 "This conversation is now over. To start again, use /create."
-            )
+            ),
+            parse_mode="Markdown"
         )
     else:
         # Delete messages when a command is used to cancel
@@ -268,7 +302,6 @@ async def fallback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.message.reply_text("I didn't understand that. Please use the buttons or /cancel to exit.")
     return ConversationHandler.END
 
-# Define the conversation handler here
 conv_handler = ConversationHandler(
     entry_points=[CommandHandler("create", create_command)],
     states={
