@@ -13,6 +13,7 @@ from telegram.ext import (
     CallbackQueryHandler,
 )
 import google_calendar_event_creator as calendar_api
+import gemini_client
 
 # Use a separate logger for this module
 logger = logging.getLogger(__name__)
@@ -21,14 +22,15 @@ logger = logging.getLogger(__name__)
 MAX_CAPACITY = os.environ.get("MAX_CAPACITY", "6")
 
 # --- Conversation States ---
-AWAIT_DATE, AWAIT_TIME, AWAIT_LOCATION, AWAIT_BOOKER_NAME, CONFIRM_DETAILS = range(5)
+AWAIT_MODE, AWAIT_IMAGE, AWAIT_DATE, AWAIT_TIME, AWAIT_LOCATION, AWAIT_BOOKER_NAME, CONFIRM_DETAILS = range(7)
 
 # --- Helper & Handler Functions ---
 def format_booking_details(booking_data):
     return (
-        f"**Event:** {booking_data.get('summary', 'Badminton Booking')}\n"
-        f"**Location:** {booking_data.get('location', 'Not specified')}\n"
+        f"**Event:** Badminton Booking\n"
+        f"**Date:** {booking_data.get('date', 'Not specified')}\n"
         f"**Time:** {booking_data.get('time', 'Not specified')}\n"
+        f"**Location:** {booking_data.get('location', 'Not specified')}\n"
         f"**Booked by:** {booking_data.get('booker_name', 'Not specified')}"
     )
 
@@ -90,19 +92,116 @@ async def check_badminton_session_command(update: Update, context: ContextTypes.
 
 
 async def create_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    logger.info("User requested to create an event. Starting manual input flow.")
-    context.user_data['booking'] = {}
+    logger.info("User requested to create an event. Checking for image attachment.")
     
     # Start collecting message IDs
     context.user_data['messages_to_delete'] = [update.message.message_id]
     
-    bot_message = await update.message.reply_text(
-        "Let's create a new event. First, please provide the event date (e.g., 'YYYY-MM-DD'):\n\n"
-        "Type /cancel to exit."
+    # Check if the message is a reply to a photo
+    if update.message.reply_to_message and update.message.reply_to_message.photo:
+        return await process_photo(update, context)
+    else:
+        # Fallback to the standard menu if no image is found
+        keyboard = [
+            [InlineKeyboardButton("Upload Image", callback_data="upload_image")],
+            [InlineKeyboardButton("Manual Input", callback_data="manual_input")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        bot_message = await update.message.reply_text(
+            "How would you like to create your event?",
+            reply_markup=reply_markup
+        )
+        context.user_data['messages_to_delete'].append(bot_message.message_id)
+
+        return AWAIT_MODE
+
+async def start_manual_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+
+    await delete_messages(context, update.effective_chat.id, context.user_data.get('messages_to_delete', []))
+
+    bot_message = await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="Let's create a new event. First, please provide the event date (e.g., 'YYYY-MM-DD'):\n\n"
+             "Type /cancel to exit."
     )
-    context.user_data['messages_to_delete'].append(bot_message.message_id)
+    context.user_data['messages_to_delete'] = [bot_message.message_id]
     
     return AWAIT_DATE
+
+async def start_image_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    
+    await delete_messages(context, update.effective_chat.id, context.user_data.get('messages_to_delete', []))
+    
+    bot_message = await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="Please upload an image of your booking confirmation. The bot will automatically extract the details.\n\n"
+             "Type /cancel to exit."
+    )
+    context.user_data['messages_to_delete'] = [bot_message.message_id]
+
+    return AWAIT_IMAGE
+
+async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    # If this is from a reply, the message object is different
+    message_with_photo = update.message.reply_to_message if update.message.reply_to_message else update.message
+    
+    # This handler is a part of the ConversationHandler, so we need to add the
+    # current message ID (the command itself) and the message with the photo
+    context.user_data['messages_to_delete'].append(message_with_photo.message_id)
+    
+    file_id = message_with_photo.photo[-1].file_id
+    telegram_file = await context.bot.get_file(file_id)
+    MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5MB
+
+    if telegram_file.file_size > MAX_IMAGE_SIZE:
+        bot_message = await update.message.reply_text(
+            "The uploaded image is too large (max 5MB allowed). Please upload a smaller image or use manual input."
+        )
+        context.user_data['messages_to_delete'].append(bot_message.message_id)
+        return AWAIT_IMAGE
+
+    file_path = await telegram_file.download_as_bytearray()
+    
+    try:
+        booking_details = await gemini_client.extract_booking_info(file_path)
+
+        if not booking_details:
+            bot_message = await update.message.reply_text("Could not extract booking details from the image. Please try again with a clearer image or use manual input.")
+            context.user_data['messages_to_delete'].append(bot_message.message_id)
+            return AWAIT_IMAGE
+            
+        context.user_data['booking'] = booking_details
+        formatted_details = format_booking_details(booking_details)
+        
+        keyboard = [
+            [InlineKeyboardButton("✅ Confirm", callback_data="confirm")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        bot_message = await update.message.reply_text(
+            f"I've extracted the following details from your image:\n\n{formatted_details}\n\n"
+            f"Would you like to confirm this event?",
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
+        )
+        context.user_data['messages_to_delete'].append(bot_message.message_id)
+        
+        return CONFIRM_DETAILS
+    except Exception as e:
+        logger.error(f"Error processing photo with Gemini API: {e}")
+        bot_message = await update.message.reply_text(
+            "An error occurred while processing the image. Please try again or use manual input.\n\n"
+            "Type /cancel to exit."
+        )
+        context.user_data['messages_to_delete'].append(bot_message.message_id)
+        return AWAIT_IMAGE
+
 
 async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_date = update.message.text
@@ -300,9 +399,18 @@ async def fallback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.message.reply_text("I didn't understand that. Please use the buttons or /cancel to exit.")
     return ConversationHandler.END
 
+# Define the conversation handler here
 conv_handler = ConversationHandler(
     entry_points=[CommandHandler("create", create_command)],
     states={
+        AWAIT_MODE: [
+            CallbackQueryHandler(start_image_upload, pattern="^upload_image$"),
+            CallbackQueryHandler(start_manual_input, pattern="^manual_input$"),
+        ],
+        AWAIT_IMAGE: [
+            MessageHandler(filters.PHOTO & ~filters.COMMAND, process_photo),
+            CommandHandler("cancel", cancel_event),
+        ],
         AWAIT_DATE: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, get_date),
             CommandHandler("cancel", cancel_event),
