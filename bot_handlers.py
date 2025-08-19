@@ -32,22 +32,15 @@ def format_booking_details(booking_data):
         f"**Booked by:** {booking_data.get('booker_name', 'Not specified')}"
     )
 
-async def delete_previous_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def delete_messages(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_ids: list[int]):
     """
-    Deletes the bot's last message and the user's last message from the chat.
-    This helps to keep the chat clean during the multi-step conversation.
+    Deletes a list of messages from the chat.
     """
-    bot_message_id = context.user_data.get('bot_message_id')
-    user_message_id = context.user_data.get('user_message_id')
-    chat_id = update.effective_chat.id
-
-    try:
-        if bot_message_id:
-            await context.bot.delete_message(chat_id=chat_id, message_id=bot_message_id)
-        if user_message_id:
-            await context.bot.delete_message(chat_id=chat_id, message_id=user_message_id)
-    except Exception as e:
-        logger.warning(f"Could not delete message. Bot might not have admin permissions: {e}")
+    for msg_id in message_ids:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        except Exception as e:
+            logger.warning(f"Could not delete message {msg_id}. Bot might not have admin permissions: {e}")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(
@@ -64,6 +57,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "Here are the available commands:\n"
         "/start - Starts the bot and shows welcome message.\n"
         "/create - Begins the step-by-step process to create a new event.\n"
+        "/cancel - Cancels the current event creation process.\n"
         "/help - Displays this help message."
     )
     await update.message.reply_text(help_text)
@@ -73,24 +67,21 @@ async def create_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     logger.info("User requested to create an event. Starting manual input flow.")
     context.user_data['booking'] = {}
     
-    # Store the user's initial message ID
-    context.user_data['user_message_id'] = update.message.message_id
+    # Start collecting message IDs
+    context.user_data['messages_to_delete'] = [update.message.message_id]
     
     bot_message = await update.message.reply_text(
         "Let's create a new event. First, please provide the event date (e.g., 'YYYY-MM-DD'):\n\n"
         "Type /cancel to exit."
     )
-    # Store the bot's message ID for later deletion
-    context.user_data['bot_message_id'] = bot_message.message_id
+    context.user_data['messages_to_delete'].append(bot_message.message_id)
     
     return AWAIT_DATE
 
 async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_date = update.message.text
-    
-    # Store the user's message ID for the current message before a new one is sent
-    context.user_data['user_message_id'] = update.message.message_id
-    
+    context.user_data['messages_to_delete'].append(update.message.message_id)
+
     try:
         datetime.strptime(user_date, '%Y-%m-%d')
         context.user_data['booking']['date'] = user_date
@@ -99,22 +90,18 @@ async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             "Great. Now, please provide the event time (e.g., 'HH:MM-HH:MM'):\n\n"
             "Type /cancel to exit."
         )
-        context.user_data['bot_message_id'] = bot_message.message_id
-        # Delete previous messages after the new prompt is sent
-        await delete_previous_messages(update, context)
+        context.user_data['messages_to_delete'].append(bot_message.message_id)
         return AWAIT_TIME
     except ValueError:
         bot_message = await update.message.reply_text(
             "Invalid date format. Please use YYYY-MM-DD, for example '2025-08-20'."
         )
-        context.user_data['bot_message_id'] = bot_message.message_id
-        await delete_previous_messages(update, context)
+        context.user_data['messages_to_delete'].append(bot_message.message_id)
         return AWAIT_DATE
 
 async def get_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_time = update.message.text
-    
-    context.user_data['user_message_id'] = update.message.message_id
+    context.user_data['messages_to_delete'].append(update.message.message_id)
     
     time_pattern = re.compile(r'^([01]\d|2[0-3]):([0-5]\d)-([01]\d|2[0-3]):([0-5]\d)$')
     if time_pattern.match(user_time):
@@ -124,21 +111,18 @@ async def get_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             "Thanks. Now, please provide the location (e.g., 'ABC Badminton Hall, Court 3'):\n\n"
             "Type /cancel to exit."
         )
-        context.user_data['bot_message_id'] = bot_message.message_id
-        await delete_previous_messages(update, context)
+        context.user_data['messages_to_delete'].append(bot_message.message_id)
         return AWAIT_LOCATION
     else:
         bot_message = await update.message.reply_text(
             "Invalid time format. Please use HH:MM-HH:MM, for example '19:00-21:00'."
         )
-        context.user_data['bot_message_id'] = bot_message.message_id
-        await delete_previous_messages(update, context)
+        context.user_data['messages_to_delete'].append(bot_message.message_id)
         return AWAIT_TIME
 
 async def get_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_location = update.message.text
-    
-    context.user_data['user_message_id'] = update.message.message_id
+    context.user_data['messages_to_delete'].append(update.message.message_id)
     
     context.user_data['booking']['location'] = user_location
     logger.info(f"Received location from user: {user_location}")
@@ -146,14 +130,12 @@ async def get_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         "Who booked the court? Please provide a name:\n\n"
         "Type /cancel to exit."
     )
-    context.user_data['bot_message_id'] = bot_message.message_id
-    await delete_previous_messages(update, context)
+    context.user_data['messages_to_delete'].append(bot_message.message_id)
     return AWAIT_BOOKER_NAME
 
 async def get_booker_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_name = update.message.text
-    
-    context.user_data['user_message_id'] = update.message.message_id
+    context.user_data['messages_to_delete'].append(update.message.message_id)
     
     context.user_data['booking']['booker_name'] = user_name
     logger.info(f"Received booker name from user: {user_name}")
@@ -172,8 +154,7 @@ async def get_booker_name(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
-    context.user_data['bot_message_id'] = bot_message.message_id
-    await delete_previous_messages(update, context)
+    context.user_data['messages_to_delete'].append(bot_message.message_id)
     
     return CONFIRM_DETAILS
 
@@ -182,10 +163,17 @@ async def confirm_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     await query.answer()
 
     booking_data = context.user_data.get('booking')
+    
+    chat_id = update.effective_chat.id
+    
     if not booking_data:
-        # If no booking data, simply delete the original message
-        await delete_previous_messages(update, context)
-        await query.edit_message_text("No booking data found. Please start over with /create.")
+        # If no booking data, clean up and send a final message
+        await delete_messages(context, chat_id, context.user_data.get('messages_to_delete', []))
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="No booking data found. Please start over with /create."
+        )
+        context.user_data.clear()
         return ConversationHandler.END
 
     logger.info(f"User confirmed event: {booking_data}")
@@ -213,43 +201,64 @@ async def confirm_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             location=location,
             description=description
         )
+        # Delete messages before sending the final confirmation
+        await delete_messages(context, chat_id, context.user_data['messages_to_delete'])
+        
         if event_link:
-            await query.edit_message_text(
-                f"✅ Confirmed! A Google Calendar event has been created.\n\n"
-                f"**Event Link:** {event_link}\n\n"
-                "This conversation is now over. To create another event, use /create.",
-                parse_mode="Markdown"
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    f"✅ Confirmed! A Google Calendar event has been created.\n\n"
+                    f"**Event Link:** {event_link}\n\n"
+                    "This conversation is now over. To create another event, use /create."
+                )
             )
         else:
-            await query.edit_message_text(
-                "❌ Failed to create a calendar event. Please check the logs or try again later.",
-                parse_mode="Markdown"
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    "❌ Failed to create a calendar event. Please check the logs or try again later."
+                )
             )
     except Exception as e:
         logger.error(f"Error calling calendar API: {e}")
-        await query.edit_message_text(
-            "❌ An unexpected error occurred while creating the calendar event. Please try again later.",
-            parse_mode="Markdown"
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "❌ An unexpected error occurred while creating the calendar event. Please try again later."
+            )
         )
 
     context.user_data.clear()
     return ConversationHandler.END
 
 async def cancel_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    chat_id = update.effective_chat.id
     # Handle both callback queries (from buttons) and command messages
     if update.callback_query:
         query = update.callback_query
         await query.answer()
-        await query.edit_message_text(
-            "❌ Canceled. The event was not created. "
-            "This conversation is now over. To start again, use /create.",
-            parse_mode="Markdown"
+        # Delete messages before sending the final cancellation message
+        await delete_messages(context, chat_id, context.user_data.get('messages_to_delete', []))
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "❌ Canceled. The event was not created. "
+                "This conversation is now over. To start again, use /create."
+            )
         )
     else:
-        await update.message.reply_text(
-            "❌ Canceled. The event was not created. "
-            "This conversation is now over. To start again, use /create.",
-            parse_mode="Markdown"
+        # Delete messages when a command is used to cancel
+        context.user_data['messages_to_delete'].append(update.message.message_id)
+        
+        await delete_messages(context, chat_id, context.user_data.get('messages_to_delete'))
+
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "❌ Canceled. The event was not created. "
+                "This conversation is now over. To start again, use /create."
+            )
         )
     
     context.user_data.clear()
