@@ -1,8 +1,9 @@
 import os
 import json
 import logging
-import base64
-import aiohttp
+import google.generativeai as genai
+from PIL import Image
+from io import BytesIO
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -13,18 +14,18 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 if not GEMINI_API_KEY:
     logger.error("GEMINI_API_KEY environment variable is not set.")
-    # In a production app, you might want to handle this more gracefully.
-    # For now, it will raise an error and prevent the bot from starting.
     raise ValueError("Missing GEMINI_API_KEY environment variable.")
 
+# Configure the Gemini API client
+genai.configure(api_key=GEMINI_API_KEY)
 
-async def extract_booking_info(image_data: bytes, mime_type: str = "image/jpeg"):
+
+async def extract_booking_info(image_data: bytes):
     """
     Calls the Gemini API with an image and a prompt to extract booking details.
     
     Args:
         image_data (bytes): The raw bytes of the image file.
-        mime_type (str): The MIME type of the image (e.g., 'image/jpeg', 'image/png').
         
     Returns:
         dict: A dictionary with extracted booking details or an empty dict if extraction fails.
@@ -48,48 +49,24 @@ async def extract_booking_info(image_data: bytes, mime_type: str = "image/jpeg")
     }
     """
     
-    base64_image = base64.b64encode(image_data).decode("utf-8")
-    
-    payload = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": prompt},
-                    {"inlineData": {"mimeType": mime_type, "data": base64_image}}
-                ]
-            }
-        ]
-    }
-    
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {GEMINI_API_KEY}"
-    }
-    
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-vision:generateContent"
-    
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, data=json.dumps(payload)) as response:
-                response.raise_for_status()
-                result = await response.json()
+        model = genai.GenerativeModel(model_name='gemini-2.5-flash')
         
-        # Check if the response contains valid candidates and content
-        if result and result.get("candidates"):
-            text = result["candidates"][0]["content"]["parts"][0]["text"]
-            # The Gemini API might return a Markdown block, so we'll clean it up
-            json_text = text.strip("```json\n").strip("\n```")
-            
-            try:
-                extracted_data = json.loads(json_text)
-                return extracted_data
-            except json.JSONDecodeError:
-                logger.error(f"Failed to decode JSON from Gemini API: {json_text}")
-                return {}
-        else:
-            logger.warning(f"Gemini API response did not contain candidates: {result}")
+        # The genai library can't process a bytearray directly, so we convert it to a PIL Image.
+        image = Image.open(BytesIO(image_data))
+        
+        response = model.generate_content([prompt, image])
+        
+        # The Gemini API might return a Markdown block, so we'll clean it up
+        json_text = response.text.strip("```json\n").strip("\n```")
+        
+        try:
+            extracted_data = json.loads(json_text)
+            return extracted_data
+        except json.JSONDecodeError:
+            logger.error(f"Failed to decode JSON from Gemini API: {json_text}")
             return {}
             
-    except aiohttp.ClientError as e:
-        logger.error(f"Gemini API request failed: {e}")
+    except Exception as e:
+        logger.error(f"Error in Gemini API request: {e}")
         return {}

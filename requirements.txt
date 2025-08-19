@@ -5,4 +5,5 @@ fastapi==0.95.2
 google-auth-oauthlib==1.2.0
 google-api-python-client
 pytz==2023.3
-aiohttp==3.9.1
+google-generativeai
+Pillow
