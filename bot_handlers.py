@@ -63,7 +63,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
     await update.message.reply_text(help_text)
 
-async def check_badminton_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def check_badminton_session_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Handles the /check_badminton_session command.
     Checks the Google Calendar for upcoming events in the next 7 days.

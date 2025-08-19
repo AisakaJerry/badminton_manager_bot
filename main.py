@@ -37,6 +37,7 @@ async def init_bot_app():
     from telegram.ext import CommandHandler
     application_instance.add_handler(CommandHandler("help", bot_handlers.help_command))
     application_instance.add_handler(CommandHandler("start", bot_handlers.start_command))
+    application_instance.add_handler(CommandHandler("check_badminton_session", bot_handlers.check_badminton_session_command))
     application_instance.add_handler(bot_handlers.conv_handler)
     
     # It is crucial to call initialize() to finalize the setup of the application instance.
