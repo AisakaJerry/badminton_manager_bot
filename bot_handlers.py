@@ -130,9 +130,6 @@ async def create_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return AWAIT_MODE
 
 async def start_manual_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not update.callback_query or not update.effective_chat or not context.user_data:
-        return ConversationHandler.END
-        
     query = update.callback_query
     await query.answer()
 
@@ -148,9 +145,6 @@ async def start_manual_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return AWAIT_DATE
 
 async def start_image_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not update.callback_query or not update.effective_chat or not context.user_data:
-        return ConversationHandler.END
-        
     query = update.callback_query
     await query.answer()
     
@@ -166,9 +160,6 @@ async def start_image_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return AWAIT_IMAGE
 
 async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not update.message or not context.user_data:
-        return ConversationHandler.END
-        
     # If this is from a reply, the message object is different
     message_with_photo = update.message.reply_to_message if update.message.reply_to_message else update.message
     
@@ -231,9 +222,6 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 
 async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not update.message or not context.user_data:
-        return ConversationHandler.END
-        
     user_date = update.message.text
     if not user_date:
         return AWAIT_DATE
@@ -261,9 +249,6 @@ async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return AWAIT_DATE
 
 async def get_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not update.message or not context.user_data:
-        return ConversationHandler.END
-        
     user_time = update.message.text
     if not user_time:
         return AWAIT_TIME
@@ -290,9 +275,6 @@ async def get_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return AWAIT_TIME
 
 async def get_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not update.message or not context.user_data:
-        return ConversationHandler.END
-        
     user_location = update.message.text
     if not user_location:
         return AWAIT_LOCATION
@@ -311,9 +293,6 @@ async def get_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return AWAIT_BOOKER_NAME
 
 async def get_booker_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not update.message or not context.user_data:
-        return ConversationHandler.END
-        
     user_name = update.message.text
     if not user_name:
         return AWAIT_BOOKER_NAME
@@ -344,9 +323,6 @@ async def get_booker_name(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     return CONFIRM_DETAILS
 
 async def confirm_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not update.callback_query or not context.user_data or not update.effective_chat:
-        return ConversationHandler.END
-        
     query = update.callback_query
     await query.answer()
 
@@ -426,9 +402,6 @@ async def confirm_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return ConversationHandler.END
 
 async def cancel_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not update.effective_chat or not context.user_data:
-        return ConversationHandler.END
-        
     chat_id = update.effective_chat.id
     
     # Check if this is a button click or a command message
