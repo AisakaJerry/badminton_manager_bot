@@ -31,7 +31,7 @@ except (json.JSONDecodeError, ValueError) as e:
     logging.error(f"Failed to parse or load service account credentials: {e}")
     raise
 
-def check_upcoming_events(days: int = 7):
+def check_upcoming_events(days: int = 14):
     """
     Checks the Google Calendar for upcoming events within a specified number of days.
 

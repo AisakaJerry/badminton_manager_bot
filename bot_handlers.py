@@ -45,6 +45,9 @@ async def delete_messages(context: ContextTypes.DEFAULT_TYPE, chat_id: int, mess
             logger.warning(f"Could not delete message {msg_id}. Bot might not have admin permissions: {e}")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not update.message:
+        return ConversationHandler.END
+        
     await update.message.reply_text(
         "Hello! I'm your Badminton Calendar Bot. "
         "I can help you create a Google Calendar event. "
@@ -54,6 +57,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sends a message explaining how to use the bot."""
+    if not update.message:
+        return
+        
     help_text = (
         "This bot helps you create Google Calendar events for badminton bookings.\n\n"
         "Here are the available commands:\n"
@@ -68,14 +74,17 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def check_badminton_session_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Handles the /check_badminton_session command.
-    Checks the Google Calendar for upcoming events in the next 7 days.
+    Checks the Google Calendar for upcoming events in the next 14 days.
     """
+    if not update.message:
+        return
+        
     logger.info("User requested to check for upcoming badminton sessions.")
     
-    events = calendar_api.check_upcoming_events(days=7)
+    events = calendar_api.check_upcoming_events(days=14)
     
     if events:
-        response_text = "Here are the upcoming badminton sessions in the next 7 days:\n\n"
+        response_text = "Here are the upcoming badminton sessions in the next 14 days:\n\n"
         for e in events:
             attendee_list = ", ".join(e['attendees']) if e['attendees'] else "No attendees specified"
             response_text += (
@@ -94,11 +103,18 @@ async def check_badminton_session_command(update: Update, context: ContextTypes.
 async def create_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     logger.info("User requested to create an event. Checking for image attachment.")
     
-    # Start collecting message IDs
-    context.user_data['messages_to_delete'] = [update.message.message_id]
+    if not update.message or not context.user_data:
+        return ConversationHandler.END
+    
+    # Store the initial trigger message ID to preserve it
+    context.user_data['initial_message_id'] = update.message.message_id
+    # Initialize list for messages that should be deleted (excluding the initial trigger)
+    context.user_data['messages_to_delete'] = []
     
     # Check if the message is a reply to a photo
     if update.message.reply_to_message and update.message.reply_to_message.photo:
+        # Store the quoted image ID to preserve it too
+        context.user_data['quoted_image_id'] = update.message.reply_to_message.message_id
         return await process_photo(update, context)
     else:
         # Fallback to the standard menu if no image is found
@@ -117,6 +133,9 @@ async def create_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return AWAIT_MODE
 
 async def start_manual_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not update.callback_query or not update.effective_chat or not context.user_data:
+        return ConversationHandler.END
+        
     query = update.callback_query
     await query.answer()
 
@@ -132,6 +151,9 @@ async def start_manual_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return AWAIT_DATE
 
 async def start_image_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not update.callback_query or not update.effective_chat or not context.user_data:
+        return ConversationHandler.END
+        
     query = update.callback_query
     await query.answer()
     
@@ -147,12 +169,20 @@ async def start_image_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return AWAIT_IMAGE
 
 async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not update.message or not context.user_data:
+        return ConversationHandler.END
+        
     # If this is from a reply, the message object is different
     message_with_photo = update.message.reply_to_message if update.message.reply_to_message else update.message
     
-    # This handler is a part of the ConversationHandler, so we need to add the
-    # current message ID (the command itself) and the message with the photo
-    context.user_data['messages_to_delete'].append(message_with_photo.message_id)
+    if not message_with_photo or not message_with_photo.photo:
+        return AWAIT_IMAGE
+    
+    # Only add user input messages to delete list, NOT the quoted image or initial command
+    # The quoted image and initial command should be preserved as they are the trigger messages
+    if not update.message.reply_to_message:
+        # This means the photo was uploaded directly (not quoted), so we can add it to delete list
+        context.user_data['messages_to_delete'].append(message_with_photo.message_id)
     
     file_id = message_with_photo.photo[-1].file_id
     telegram_file = await context.bot.get_file(file_id)
@@ -204,11 +234,20 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 
 async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not update.message or not context.user_data:
+        return ConversationHandler.END
+        
     user_date = update.message.text
+    if not user_date:
+        return AWAIT_DATE
+        
+    # Add user input message to delete list
     context.user_data['messages_to_delete'].append(update.message.message_id)
 
     try:
         datetime.strptime(user_date, '%Y-%m-%d')
+        if 'booking' not in context.user_data:
+            context.user_data['booking'] = {}
         context.user_data['booking']['date'] = user_date
         logger.info(f"Received date from user: {user_date}")
         bot_message = await update.message.reply_text(
@@ -225,11 +264,19 @@ async def get_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return AWAIT_DATE
 
 async def get_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not update.message or not context.user_data:
+        return ConversationHandler.END
+        
     user_time = update.message.text
+    if not user_time:
+        return AWAIT_TIME
+        
     context.user_data['messages_to_delete'].append(update.message.message_id)
     
     time_pattern = re.compile(r'^([01]\d|2[0-3]):([0-5]\d)-([01]\d|2[0-3]):([0-5]\d)$')
     if time_pattern.match(user_time):
+        if 'booking' not in context.user_data:
+            context.user_data['booking'] = {}
         context.user_data['booking']['time'] = user_time
         logger.info(f"Received time from user: {user_time}")
         bot_message = await update.message.reply_text(
@@ -246,9 +293,17 @@ async def get_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return AWAIT_TIME
 
 async def get_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not update.message or not context.user_data:
+        return ConversationHandler.END
+        
     user_location = update.message.text
+    if not user_location:
+        return AWAIT_LOCATION
+        
     context.user_data['messages_to_delete'].append(update.message.message_id)
     
+    if 'booking' not in context.user_data:
+        context.user_data['booking'] = {}
     context.user_data['booking']['location'] = user_location
     logger.info(f"Received location from user: {user_location}")
     bot_message = await update.message.reply_text(
@@ -259,9 +314,17 @@ async def get_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return AWAIT_BOOKER_NAME
 
 async def get_booker_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not update.message or not context.user_data:
+        return ConversationHandler.END
+        
     user_name = update.message.text
+    if not user_name:
+        return AWAIT_BOOKER_NAME
+        
     context.user_data['messages_to_delete'].append(update.message.message_id)
     
+    if 'booking' not in context.user_data:
+        context.user_data['booking'] = {}
     context.user_data['booking']['booker_name'] = user_name
     logger.info(f"Received booker name from user: {user_name}")
     
@@ -284,6 +347,9 @@ async def get_booker_name(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     return CONFIRM_DETAILS
 
 async def confirm_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not update.callback_query or not context.user_data or not update.effective_chat:
+        return ConversationHandler.END
+        
     query = update.callback_query
     await query.answer()
 
@@ -327,7 +393,8 @@ async def confirm_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             description=description
         )
         
-        # Delete messages before sending the final confirmation
+        # Delete conversation messages before sending the final confirmation
+        # This preserves the initial trigger message (command or quoted image)
         await delete_messages(context, chat_id, context.user_data['messages_to_delete'])
         
         if event_link:
@@ -362,13 +429,17 @@ async def confirm_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return ConversationHandler.END
 
 async def cancel_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not update.effective_chat or not context.user_data:
+        return ConversationHandler.END
+        
     chat_id = update.effective_chat.id
     
     # Check if this is a button click or a command message
     if update.callback_query:
         query = update.callback_query
         await query.answer()
-        # Delete messages before sending the final cancellation message
+        # Delete conversation messages before sending the final cancellation message
+        # This preserves the initial trigger message
         await delete_messages(context, chat_id, context.user_data.get('messages_to_delete', []))
         await context.bot.send_message(
             chat_id=chat_id,
@@ -379,10 +450,13 @@ async def cancel_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             parse_mode="Markdown"
         )
     else:
-        # Delete messages when a command is used to cancel
-        context.user_data['messages_to_delete'].append(update.message.message_id)
+        # Add the cancel command message to delete list
+        if update.message:
+            context.user_data.setdefault('messages_to_delete', []).append(update.message.message_id)
         
-        await delete_messages(context, chat_id, context.user_data.get('messages_to_delete'))
+        # Delete conversation messages when a command is used to cancel
+        # This preserves the initial trigger message
+        await delete_messages(context, chat_id, context.user_data.get('messages_to_delete', []))
 
         await context.bot.send_message(
             chat_id=chat_id,
@@ -396,6 +470,9 @@ async def cancel_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return ConversationHandler.END
 
 async def fallback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not update.message:
+        return ConversationHandler.END
+        
     await update.message.reply_text("I didn't understand that. Please use the buttons or /cancel to exit.")
     return ConversationHandler.END
 
