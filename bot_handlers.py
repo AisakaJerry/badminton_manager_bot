@@ -103,9 +103,6 @@ async def check_badminton_session_command(update: Update, context: ContextTypes.
 async def create_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     logger.info("User requested to create an event. Checking for image attachment.")
     
-    if not update.message or not context.user_data:
-        return ConversationHandler.END
-    
     # Store the initial trigger message ID to preserve it
     context.user_data['initial_message_id'] = update.message.message_id
     # Initialize list for messages that should be deleted (excluding the initial trigger)
