@@ -52,7 +52,7 @@ async def extract_booking_info(image_data: bytes):
     """
     
     try:
-        model = genai.GenerativeModel(model_name='gemini-2.5-flash')
+        model = genai.GenerativeModel(model_name='gemini-2.5-pro')
         
         # The genai library can't process a bytearray directly, so we convert it to a PIL Image.
         image = Image.open(BytesIO(image_data))
