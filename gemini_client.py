@@ -35,9 +35,11 @@ async def extract_booking_info(image_data: bytes):
     
     1.  **date**: The booking date in 'YYYY-MM-DD' format.
     2.  **time**: The booking time range in 'HH:MM-HH:MM' format.
-    3.  **location**: The name of the booking location.
+    3.  **location**: The name of the booking location. Include court info if have any.
     4.  **booker_name**: The name of the person who made the booking.
     
+    Before you fill in the info, remember to check the current year first, since in some images there might not have year info.
+
     If any information is not found, use a null value. Do not add any extra text outside of the JSON object.
     
     Example response format:
