@@ -38,7 +38,9 @@ async def extract_booking_info(image_data: bytes):
     3.  **location**: The name of the booking location. Include court info if have any.
     4.  **booker_name**: The name of the person who made the booking.
     
-    Before you fill in the info, remember to check the current year first, since in some images there might not have year info.
+    Before you fill in the info, remember to check the current year first, since in some images there might not have year info. The dates are within 3 weeks of the current date, so check if the year of the booking should be in the current year, or the next year.
+
+    In some images, there may not be a end time included in the message. For these cases, check how many start times are included. It can be assumed that each slot is only 1 hour, so if there is only 1 start time (ie: 14:00), the time range returned should be (14:00-15:00)
 
     If any information is not found, use a null value. Do not add any extra text outside of the JSON object.
     
