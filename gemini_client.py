@@ -1,3 +1,4 @@
+from datetime import datetime
 import os
 import json
 import logging
@@ -30,6 +31,9 @@ async def extract_booking_info(image_data: bytes):
     Returns:
         dict: A dictionary with extracted booking details or an empty dict if extraction fails.
     """
+    # get the current date from local time
+    currentDate = datetime.now().strftime("%Y-%m-%d")
+
     prompt = """
     You are a highly specialized text extraction model. From the following image, which is a booking confirmation, extract the following information and return it in a JSON format.
     

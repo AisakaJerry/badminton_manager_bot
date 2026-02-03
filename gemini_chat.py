@@ -32,4 +32,4 @@ async def get_gemini_response(prompt_text: str):
         return response.text
     except Exception as e:
         logger.error(f"Gemini API request failed: {e}")
-        return "Sorry, I couldn't process your request at the moment."
+        return "Sorry, I couldn't process your request at the moment due to Gemini API failure. Admin please check the logs."
