@@ -14,6 +14,7 @@ from telegram.ext import (
 )
 import google_calendar_event_creator as calendar_api
 import gemini_client
+import memory_store
 
 # Use a separate logger for this module
 logger = logging.getLogger(__name__)
@@ -67,9 +68,27 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/create - Begins the step-by-step process to create a new event.\n"
         "/cancel - Cancels the current event creation process.\n"
         "/help - Displays this help message.\n"
-        "/check_badminton_session - Checks for all badminton sessions in the next 7 days."
+        "/check_badminton_session - Checks for all badminton sessions in the next 7 days.\n"
+        "/remember <fact> - Remembers a fact (e.g. court nicknames, regular bookers) to help "
+        "the bot read future booking screenshots in this chat."
     )
     await update.message.reply_text(help_text)
+
+async def remember_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles the /remember command, storing a fact for this chat."""
+    if not update.message:
+        return
+
+    fact = " ".join(context.args) if context.args else ""
+    if not fact:
+        await update.message.reply_text(
+            "Please provide something to remember, e.g. '/remember each badminton slot lasts 1 hour'."
+        )
+        return
+
+    memory_store.remember(update.effective_chat.id, fact)
+    logger.info(f"Stored memory for chat {update.effective_chat.id}: {fact}")
+    await update.message.reply_text(f"Got it, I'll remember: \"{fact}\"")
 
 async def check_badminton_session_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
@@ -186,7 +205,8 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     file_path = await telegram_file.download_as_bytearray()
     
     try:
-        booking_details = await gemini_client.extract_booking_info(file_path)
+        memories = memory_store.get_memories(update.effective_chat.id)
+        booking_details = await gemini_client.extract_booking_info(file_path, memories)
 
         if not booking_details:
             bot_message = await update.message.reply_text("Could not extract booking details from the image. Please try again with a clearer image or use manual input.")

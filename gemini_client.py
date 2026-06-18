@@ -22,18 +22,28 @@ if not GEMINI_API_KEY:
 genai.configure(api_key=GEMINI_API_KEY)
 
 
-async def extract_booking_info(image_data: bytes):
+async def extract_booking_info(image_data: bytes, memories: list[str] | None = None):
     """
     Calls the Gemini API with an image and a prompt to extract booking details.
-    
+
     Args:
         image_data (bytes): The raw bytes of the image file.
-        
+        memories (list[str]): Facts remembered for this chat (e.g. court nicknames,
+            regular bookers) to help interpret the image.
+
     Returns:
         dict: A dictionary with extracted booking details or an empty dict if extraction fails.
     """
     # get the current date in Singapore time, since all bookings are local to that timezone
     current_date = datetime.now(pytz.timezone("Asia/Singapore")).strftime("%Y-%m-%d")
+
+    memory_section = ""
+    if memories:
+        facts = "\n".join(f"- {fact}" for fact in memories)
+        memory_section = f"""
+    Known facts about this group that may help you interpret the image (e.g. court nicknames, regular bookers):
+    {facts}
+    """
 
     prompt = f"""
     You are a highly specialized text extraction model. From the following image, which is a booking confirmation, extract the following information and return it in a JSON format.
@@ -51,7 +61,7 @@ async def extract_booking_info(image_data: bytes):
     In some images, there may not be a end time included in the message. For these cases, check how many start times are included. It can be assumed that each slot is only 1 hour, so if there is only 1 start time (ie: 14:00), the time range returned should be (14:00-15:00)
 
     If any information is not found, use a null value. Do not add any extra text outside of the JSON object.
-
+    {memory_section}
     Example response format:
     {{
       "date": "2025-08-20",
