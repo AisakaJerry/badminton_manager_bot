@@ -39,6 +39,9 @@ async def init_bot_app():
     application_instance.add_handler(CommandHandler("start", bot_handlers.start_command))
     application_instance.add_handler(CommandHandler("check_badminton_session", bot_handlers.check_badminton_session_command))
     application_instance.add_handler(CommandHandler("remember", bot_handlers.remember_command))
+    # Runs in its own group so it observes every photo (for media-group tracking) without
+    # interfering with the conversation handler's own photo handling in the default group.
+    application_instance.add_handler(bot_handlers.media_group_handler, group=1)
     application_instance.add_handler(bot_handlers.conv_handler)
     
     # It is crucial to call initialize() to finalize the setup of the application instance.

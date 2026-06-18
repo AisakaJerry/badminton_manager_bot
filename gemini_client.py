@@ -22,12 +22,13 @@ if not GEMINI_API_KEY:
 genai.configure(api_key=GEMINI_API_KEY)
 
 
-async def extract_booking_info(image_data: bytes, memories: list[str] | None = None):
+async def extract_booking_info(images_data: list[bytes], memories: list[str] | None = None):
     """
-    Calls the Gemini API with an image and a prompt to extract booking details.
+    Calls the Gemini API with one or more images and a prompt to extract booking details.
 
     Args:
-        image_data (bytes): The raw bytes of the image file.
+        images_data (list[bytes]): The raw bytes of each image file. Multiple images are
+            treated as one booking confirmation (e.g. split across several screenshots).
         memories (list[str]): Facts remembered for this chat (e.g. court nicknames,
             regular bookers) to help interpret the image.
 
@@ -46,7 +47,7 @@ async def extract_booking_info(image_data: bytes, memories: list[str] | None = N
     """
 
     prompt = f"""
-    You are a highly specialized text extraction model. From the following image, which is a booking confirmation, extract the following information and return it in a JSON format.
+    You are a highly specialized text extraction model. You will be given one or more images that together represent a single booking confirmation (for example, the same booking split across multiple screenshots). Combine information across all images and extract the following information, returning it in a JSON format.
 
     1.  **date**: The booking date in 'YYYY-MM-DD' format.
     2.  **time**: The booking time range in 'HH:MM-HH:MM' format.
@@ -74,10 +75,10 @@ async def extract_booking_info(image_data: bytes, memories: list[str] | None = N
     try:
         model = genai.GenerativeModel(model_name='gemini-2.5-pro')
         
-        # The genai library can't process a bytearray directly, so we convert it to a PIL Image.
-        image = Image.open(BytesIO(image_data))
-        
-        response = model.generate_content([prompt, image])
+        # The genai library can't process a bytearray directly, so we convert each to a PIL Image.
+        images = [Image.open(BytesIO(data)) for data in images_data]
+
+        response = model.generate_content([prompt, *images])
         
         # The Gemini API might return a Markdown block, so we'll clean it up
         json_text = response.text.strip("```json\n").strip("\n```")

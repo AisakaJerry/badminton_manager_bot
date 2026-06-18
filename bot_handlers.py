@@ -1,6 +1,7 @@
 import os
 import logging
 import re
+from collections import OrderedDict
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -24,6 +25,40 @@ MAX_CAPACITY = os.environ.get("MAX_CAPACITY", "6")
 
 # --- Conversation States ---
 AWAIT_MODE, AWAIT_IMAGE, AWAIT_DATE, AWAIT_TIME, AWAIT_LOCATION, AWAIT_BOOKER_NAME, CONFIRM_DETAILS = range(7)
+
+# --- Media Group Tracking ---
+# Telegram sends each photo in a multi-photo message ("album") as a separate update sharing
+# a media_group_id. If a user later replies to just one of them, that reply only carries that
+# single message. This cache lets us recover the other photos in the same album by chat.
+_MAX_CACHED_MEDIA_GROUPS = 200
+_media_group_cache: "OrderedDict[tuple[int, str], list[tuple[int, str]]]" = OrderedDict()
+
+def _cache_media_group_photo(chat_id: int, media_group_id: str, message_id: int, file_id: str) -> None:
+    key = (chat_id, media_group_id)
+    _media_group_cache.setdefault(key, []).append((message_id, file_id))
+    _media_group_cache.move_to_end(key)
+    while len(_media_group_cache) > _MAX_CACHED_MEDIA_GROUPS:
+        _media_group_cache.popitem(last=False)
+
+def _get_album_file_ids(chat_id: int, message_with_photo) -> list[str]:
+    """Returns the file_ids of every photo in the same album as message_with_photo, in send order."""
+    if not message_with_photo.media_group_id:
+        return [message_with_photo.photo[-1].file_id]
+
+    cached = dict(_media_group_cache.get((chat_id, message_with_photo.media_group_id), []))
+    cached[message_with_photo.message_id] = message_with_photo.photo[-1].file_id
+    return [file_id for _, file_id in sorted(cached.items())]
+
+async def track_media_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Records every photo sent as part of an album, so a later reply can recover all of them."""
+    message = update.message
+    if not message or not message.photo or not message.media_group_id:
+        return
+    _cache_media_group_photo(
+        update.effective_chat.id, message.media_group_id, message.message_id, message.photo[-1].file_id
+    )
+
+media_group_handler = MessageHandler(filters.PHOTO, track_media_group)
 
 # --- Helper & Handler Functions ---
 def format_booking_details(booking_data):
@@ -191,22 +226,26 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         # This means the photo was uploaded directly (not quoted), so we can add it to delete list
         context.user_data['messages_to_delete'].append(message_with_photo.message_id)
     
-    file_id = message_with_photo.photo[-1].file_id
-    telegram_file = await context.bot.get_file(file_id)
+    chat_id = update.effective_chat.id
+    file_ids = _get_album_file_ids(chat_id, message_with_photo)
     MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5MB
 
-    if telegram_file.file_size > MAX_IMAGE_SIZE:
-        bot_message = await update.message.reply_text(
-            "The uploaded image is too large (max 5MB allowed). Please upload a smaller image or use manual input."
-        )
-        context.user_data['messages_to_delete'].append(bot_message.message_id)
-        return AWAIT_IMAGE
+    images_data = []
+    for file_id in file_ids:
+        telegram_file = await context.bot.get_file(file_id)
 
-    file_path = await telegram_file.download_as_bytearray()
-    
+        if telegram_file.file_size > MAX_IMAGE_SIZE:
+            bot_message = await update.message.reply_text(
+                "One of the uploaded images is too large (max 5MB allowed). Please upload smaller images or use manual input."
+            )
+            context.user_data['messages_to_delete'].append(bot_message.message_id)
+            return AWAIT_IMAGE
+
+        images_data.append(await telegram_file.download_as_bytearray())
+
     try:
-        memories = memory_store.get_memories(update.effective_chat.id)
-        booking_details = await gemini_client.extract_booking_info(file_path, memories)
+        memories = memory_store.get_memories(chat_id)
+        booking_details = await gemini_client.extract_booking_info(images_data, memories)
 
         if not booking_details:
             bot_message = await update.message.reply_text("Could not extract booking details from the image. Please try again with a clearer image or use manual input.")
