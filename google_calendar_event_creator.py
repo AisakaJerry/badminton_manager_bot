@@ -15,6 +15,34 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 CREDENTIALS_JSON = os.environ.get("GOOGLE_CALENDAR_CREDENTIALS_JSON")
 CALENDAR_ID = os.environ.get("CALENDAR_ID", "primary")
 
+# Optional manual overrides for attendees whose auto-derived nickname (from their email's
+# local-part) doesn't look right, e.g. "ken123@gmail.com:Ken,j.huang@gmail.com:Jacky"
+ATTENDEE_NICKNAMES = os.environ.get("ATTENDEE_NICKNAMES", "")
+
+# Only these response statuses count as "coming" for /check_badminton_session
+ATTENDING_STATUSES = {"accepted", "tentative"}
+
+
+def _parse_nickname_overrides(raw: str) -> dict:
+    overrides = {}
+    for pair in raw.split(","):
+        if ":" not in pair:
+            continue
+        email, nickname = pair.split(":", 1)
+        overrides[email.strip().lower()] = nickname.strip()
+    return overrides
+
+
+_NICKNAME_OVERRIDES = _parse_nickname_overrides(ATTENDEE_NICKNAMES)
+
+
+def _attendee_display_name(email: str) -> str:
+    override = _NICKNAME_OVERRIDES.get(email.lower())
+    if override:
+        return override
+    local_part = email.split("@")[0]
+    return local_part.replace(".", " ").replace("_", " ").title()
+
 # Raise an error if the credentials are not set
 if not CREDENTIALS_JSON:
     logging.error("GOOGLE_CALENDAR_CREDENTIALS_JSON environment variable is not set.")
@@ -64,9 +92,13 @@ def check_upcoming_events(days: int = 14):
             start = event['start'].get('dateTime', event['start'].get('date'))
             end = event['end'].get('dateTime', event['end'].get('date'))
             
-            # Extract attendees, defaulting to an empty list if not found
+            # Only show attendees who accepted or might come, using a display nickname rather than their email
             attendees = event.get('attendees', [])
-            attendee_emails = [a['email'] for a in attendees if 'email' in a]
+            attendee_emails = [
+                _attendee_display_name(a['email'])
+                for a in attendees
+                if 'email' in a and a.get('responseStatus') in ATTENDING_STATUSES
+            ]
             
             event_list.append({
                 'summary': event['summary'],
