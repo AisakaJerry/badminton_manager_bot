@@ -42,20 +42,34 @@ def _cache_media_group_photo(chat_id: int, media_group_id: str, message_id: int,
 
 def _get_album_file_ids(chat_id: int, message_with_photo) -> list[str]:
     """Returns the file_ids of every photo in the same album as message_with_photo, in send order."""
+    logger.info(
+        f"[album-debug] resolving album for chat={chat_id} message_id={message_with_photo.message_id} "
+        f"media_group_id={message_with_photo.media_group_id!r} cache_keys={list(_media_group_cache.keys())}"
+    )
     if not message_with_photo.media_group_id:
         return [message_with_photo.photo[-1].file_id]
 
     cached = dict(_media_group_cache.get((chat_id, message_with_photo.media_group_id), []))
     cached[message_with_photo.message_id] = message_with_photo.photo[-1].file_id
-    return [file_id for _, file_id in sorted(cached.items())]
+    file_ids = [file_id for _, file_id in sorted(cached.items())]
+    logger.info(f"[album-debug] resolved {len(file_ids)} file_id(s) for media_group_id={message_with_photo.media_group_id!r}")
+    return file_ids
 
 async def track_media_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Records every photo sent as part of an album, so a later reply can recover all of them."""
     message = update.message
+    logger.info(
+        f"[album-debug] track_media_group fired: has_message={bool(message)} "
+        f"has_photo={bool(message and message.photo)} media_group_id={getattr(message, 'media_group_id', None)!r}"
+    )
     if not message or not message.photo or not message.media_group_id:
         return
     _cache_media_group_photo(
         update.effective_chat.id, message.media_group_id, message.message_id, message.photo[-1].file_id
+    )
+    logger.info(
+        f"[album-debug] cached photo: chat={update.effective_chat.id} media_group_id={message.media_group_id!r} "
+        f"message_id={message.message_id}"
     )
 
 media_group_handler = MessageHandler(filters.PHOTO, track_media_group)
