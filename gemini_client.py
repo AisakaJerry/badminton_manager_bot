@@ -3,6 +3,7 @@ import os
 import json
 import logging
 import google.generativeai as genai
+import pytz
 from PIL import Image
 from io import BytesIO
 
@@ -31,30 +32,33 @@ async def extract_booking_info(image_data: bytes):
     Returns:
         dict: A dictionary with extracted booking details or an empty dict if extraction fails.
     """
-    # get the current date from local time
-    currentDate = datetime.now().strftime("%Y-%m-%d")
+    # get the current date in Singapore time, since all bookings are local to that timezone
+    current_date = datetime.now(pytz.timezone("Asia/Singapore")).strftime("%Y-%m-%d")
 
-    prompt = """
+    prompt = f"""
     You are a highly specialized text extraction model. From the following image, which is a booking confirmation, extract the following information and return it in a JSON format.
-    
+
     1.  **date**: The booking date in 'YYYY-MM-DD' format.
     2.  **time**: The booking time range in 'HH:MM-HH:MM' format.
     3.  **location**: The name of the booking location. Include court info if have any.
     4.  **booker_name**: The name of the person who made the booking.
-    
-    Before you fill in the info, remember to check the current year first, since in some images there might not have year info. The dates are within 3 weeks of the current date, so check if the year of the booking should be in the current year, or the next year.
+
+    Today's date is {current_date}. Use it to resolve the booking year, following these rules in order:
+    1. Default to the year of today's date ({current_date[:4]}).
+    2. Only use a different year if the image explicitly prints that year next to the booking date (e.g. "2026" or "26").
+    3. If no year is printed and the booking's month/day would fall more than 3 weeks before today using the default year, use next year instead, since bookings are always for upcoming sessions.
 
     In some images, there may not be a end time included in the message. For these cases, check how many start times are included. It can be assumed that each slot is only 1 hour, so if there is only 1 start time (ie: 14:00), the time range returned should be (14:00-15:00)
 
     If any information is not found, use a null value. Do not add any extra text outside of the JSON object.
-    
+
     Example response format:
-    {
+    {{
       "date": "2025-08-20",
       "time": "19:00-21:00",
       "location": "Radin Mas Primary School Court 3",
       "booker_name": "John Doe"
-    }
+    }}
     """
     
     try:
