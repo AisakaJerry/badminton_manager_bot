@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 # --- Configuration ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable not set.")
@@ -46,6 +47,15 @@ async def init_bot_app():
     
     # It is crucial to call initialize() to finalize the setup of the application instance.
     await application_instance.initialize()
+
+    # Re-assert the webhook on every startup. Regenerating the bot token in BotFather
+    # wipes the webhook on Telegram's side, so registering it here means a redeploy is
+    # all that's needed to restore delivery after a token rotation.
+    if WEBHOOK_URL:
+        await application_instance.bot.set_webhook(url=WEBHOOK_URL)
+        logger.info(f"Webhook registered: {WEBHOOK_URL}")
+    else:
+        logger.warning("WEBHOOK_URL not set; skipping webhook registration.")
 
 
 @app.post("/")
