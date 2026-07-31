@@ -1,0 +1,8 @@
+.git/
+.gitignore
+.codegraph/
+.claude/
+.venv/
+venv/
+__pycache__/
+*.pyc
