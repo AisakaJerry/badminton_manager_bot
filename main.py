@@ -48,6 +48,11 @@ async def init_bot_app():
     # interfering with the conversation handler's own photo handling in the default group.
     application_instance.add_handler(bot_handlers.media_group_handler, group=1)
     application_instance.add_handler(bot_handlers.conv_handler)
+    # Confirm/Cancel buttons are stateless (the pending booking lives in Firestore), so they sit
+    # outside the conversation and work on any instance. The catch-all must come last.
+    application_instance.add_handler(bot_handlers.confirm_handler)
+    application_instance.add_handler(bot_handlers.cancel_button_handler)
+    application_instance.add_handler(bot_handlers.expired_button_handler)
     
     # It is crucial to call initialize() to finalize the setup of the application instance.
     await application_instance.initialize()

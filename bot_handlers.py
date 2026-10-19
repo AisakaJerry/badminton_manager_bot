@@ -16,6 +16,7 @@ import google_calendar_event_creator as calendar_api
 import gemini_client
 import memory_store
 import media_group_store
+import pending_booking_store
 
 # Use a separate logger for this module
 logger = logging.getLogger(__name__)
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 MAX_CAPACITY = os.environ.get("MAX_CAPACITY", "6")
 
 # --- Conversation States ---
-AWAIT_MODE, AWAIT_IMAGE, AWAIT_DATE, AWAIT_TIME, AWAIT_LOCATION, AWAIT_BOOKER_NAME, CONFIRM_DETAILS = range(7)
+AWAIT_MODE, AWAIT_IMAGE, AWAIT_DATE, AWAIT_TIME, AWAIT_LOCATION, AWAIT_BOOKER_NAME = range(6)
 
 # --- Media Group Tracking ---
 # Telegram sends each photo in a multi-photo message ("album") as a separate update sharing
@@ -62,6 +63,31 @@ def format_booking_details(booking_data):
         f"**Location:** {booking_data.get('location', 'Not specified')}\n"
         f"**Booked by:** {booking_data.get('booker_name', 'Not specified')}"
     )
+
+async def send_confirmation_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, intro: str) -> int:
+    """
+    Persists the collected booking to Firestore and shows Confirm/Cancel buttons carrying its id.
+    Ends the conversation: the buttons are handled by the standalone confirm/cancel handlers below,
+    which work on any Cloud Run instance and for any member of the chat.
+    """
+    booking_id = pending_booking_store.save(
+        chat_id=update.effective_chat.id,
+        user_id=update.effective_user.id,
+        booking=context.user_data['booking'],
+        messages_to_delete=context.user_data['messages_to_delete'],
+    )
+    keyboard = [
+        [InlineKeyboardButton("✅ Confirm", callback_data=f"confirm:{booking_id}")],
+        [InlineKeyboardButton("❌ Cancel", callback_data=f"cancel:{booking_id}")]
+    ]
+    await update.message.reply_text(
+        f"{intro}\n\n{format_booking_details(context.user_data['booking'])}\n\n"
+        f"Would you like to confirm this event?",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
+    context.user_data.clear()
+    return ConversationHandler.END
 
 async def delete_messages(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_ids: list[int]):
     """
@@ -246,23 +272,9 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             return AWAIT_IMAGE
             
         context.user_data['booking'] = booking_details
-        formatted_details = format_booking_details(booking_details)
-        
-        keyboard = [
-            [InlineKeyboardButton("✅ Confirm", callback_data="confirm")],
-            [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        bot_message = await update.message.reply_text(
-            f"I've extracted the following details from your image:\n\n{formatted_details}\n\n"
-            f"Would you like to confirm this event?",
-            reply_markup=reply_markup,
-            parse_mode="Markdown"
+        return await send_confirmation_prompt(
+            update, context, "I've extracted the following details from your image:"
         )
-        context.user_data['messages_to_delete'].append(bot_message.message_id)
-        
-        return CONFIRM_DETAILS
     except Exception as e:
         logger.error(f"Error processing photo with Gemini API: {e}")
         bot_message = await update.message.reply_text(
@@ -355,44 +367,31 @@ async def get_booker_name(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         context.user_data['booking'] = {}
     context.user_data['booking']['booker_name'] = user_name
     logger.info(f"Received booker name from user: {user_name}")
-    
-    booking_details = context.user_data['booking']
-    formatted_details = format_booking_details(booking_details)
-    keyboard = [
-        [InlineKeyboardButton("✅ Confirm", callback_data="confirm")],
-        [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    bot_message = await update.message.reply_text(
-        f"I've collected the following details:\n\n{formatted_details}\n\n"
-        f"Would you like to confirm this event?",
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
-    )
-    context.user_data['messages_to_delete'].append(bot_message.message_id)
-    
-    return CONFIRM_DETAILS
 
-async def confirm_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    return await send_confirmation_prompt(update, context, "I've collected the following details:")
+
+async def remove_buttons(query) -> None:
+    """Strips the inline keyboard from a stale prompt; ignores failures (e.g. the message was already deleted)."""
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception as e:
+        logger.warning(f"Could not remove stale buttons: {e}")
+
+async def confirm_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
+    booking_id = query.data.split(":", 1)[1]
+    chat_id = update.effective_chat.id
+
+    pending = pending_booking_store.pop(booking_id)
+    if not pending:
+        # Already confirmed/canceled (e.g. a double-click), or the prompt predates this store.
+        await query.answer("This booking was already handled. Use /create to start over.", show_alert=True)
+        await remove_buttons(query)
+        return
     await query.answer()
 
-    booking_data = context.user_data.get('booking')
-    
-    chat_id = update.effective_chat.id
-    
-    if not booking_data:
-        # If no booking data, clean up and send a final message
-        await delete_messages(context, chat_id, context.user_data.get('messages_to_delete', []))
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="No booking data found. Please start over with /create."
-        )
-        context.user_data.clear()
-        return ConversationHandler.END
-
-    logger.info(f"User confirmed event: {booking_data}")
+    booking_data = pending['booking']
+    logger.info(f"User {update.effective_user.id} confirmed event: {booking_data}")
     
     date = booking_data.get('date')
     time = booking_data.get('time')
@@ -418,9 +417,9 @@ async def confirm_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             description=description
         )
         
-        # Delete conversation messages before sending the final confirmation
+        # Delete conversation messages (including this prompt) before sending the final confirmation.
         # This preserves the initial trigger message (command or quoted image)
-        await delete_messages(context, chat_id, context.user_data['messages_to_delete'])
+        await delete_messages(context, chat_id, pending['messages_to_delete'] + [query.message.message_id])
         
         if event_link:
             await context.bot.send_message(
@@ -450,46 +449,74 @@ async def confirm_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             parse_mode="Markdown"
         )
 
-    context.user_data.clear()
-    return ConversationHandler.END
+async def cancel_booking_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    booking_id = query.data.split(":", 1)[1]
+    chat_id = update.effective_chat.id
+
+    pending = pending_booking_store.pop(booking_id)
+    if not pending:
+        await query.answer("This booking was already handled. Use /create to start over.", show_alert=True)
+        await remove_buttons(query)
+        return
+    await query.answer()
+    logger.info(f"User {update.effective_user.id} canceled pending booking {booking_id}")
+
+    # Delete conversation messages (including this prompt) before sending the final cancellation message.
+    # This preserves the initial trigger message
+    await delete_messages(context, chat_id, pending['messages_to_delete'] + [query.message.message_id])
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            "❌ Canceled. The event was not created. "
+            "This conversation is now over. To start again, use /create."
+        ),
+        parse_mode="Markdown"
+    )
 
 async def cancel_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """/cancel while the /create conversation is still collecting details."""
     chat_id = update.effective_chat.id
-    
-    # Check if this is a button click or a command message
-    if update.callback_query:
-        query = update.callback_query
-        await query.answer()
-        # Delete conversation messages before sending the final cancellation message
-        # This preserves the initial trigger message
-        await delete_messages(context, chat_id, context.user_data.get('messages_to_delete', []))
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=(
-                "❌ Canceled. The event was not created. "
-                "This conversation is now over. To start again, use /create."
-            ),
-            parse_mode="Markdown"
-        )
-    else:
-        # Add the cancel command message to delete list
-        if update.message:
-            context.user_data.setdefault('messages_to_delete', []).append(update.message.message_id)
-        
-        # Delete conversation messages when a command is used to cancel
-        # This preserves the initial trigger message
-        await delete_messages(context, chat_id, context.user_data.get('messages_to_delete', []))
 
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=(
-                "❌ Canceled. The event was not created. "
-                "This conversation is now over. To start again, use /create."
-            )
+    # Add the cancel command message to delete list
+    if update.message:
+        context.user_data.setdefault('messages_to_delete', []).append(update.message.message_id)
+    
+    # Delete conversation messages when a command is used to cancel
+    # This preserves the initial trigger message
+    await delete_messages(context, chat_id, context.user_data.get('messages_to_delete', []))
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            "❌ Canceled. The event was not created. "
+            "This conversation is now over. To start again, use /create."
         )
+    )
     
     context.user_data.clear()
     return ConversationHandler.END
+
+async def expired_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Catch-all for button clicks no other handler took, e.g. the Upload/Manual menu after the
+    instance holding that conversation scaled down, someone else's menu in a group, or buttons
+    from before persistent bookings. Answering the query stops Telegram's loading spinner instead
+    of leaving the button stuck. The buttons are left in place since they may still be live for
+    the user who started that /create.
+    """
+    query = update.callback_query
+    logger.warning(
+        f"Unhandled button click data={query.data!r} user={update.effective_user.id} chat={update.effective_chat.id}"
+    )
+    await query.answer(
+        "This session has expired or belongs to someone else. Please start your own with /create.",
+        show_alert=True,
+    )
+
+confirm_handler = CallbackQueryHandler(confirm_event, pattern="^confirm:")
+cancel_button_handler = CallbackQueryHandler(cancel_booking_button, pattern="^cancel:")
+expired_button_handler = CallbackQueryHandler(expired_button)
 
 async def fallback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not update.message:
@@ -525,10 +552,6 @@ conv_handler = ConversationHandler(
         AWAIT_BOOKER_NAME: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, get_booker_name),
             CommandHandler("cancel", cancel_event),
-        ],
-        CONFIRM_DETAILS: [
-            CallbackQueryHandler(confirm_event, pattern="^confirm$"),
-            CallbackQueryHandler(cancel_event, pattern="^cancel$"),
         ],
     },
     fallbacks=[CommandHandler("cancel", cancel_event)],
